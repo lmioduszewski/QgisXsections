@@ -1,0 +1,11 @@
+BEGIN options
+  HEAD  FILEOUT  disv_small.hds
+END options
+
+BEGIN period  1
+  SAVE  HEAD  ALL
+END period  1
+
+BEGIN period  3
+  SAVE  HEAD  LAST
+END period  3

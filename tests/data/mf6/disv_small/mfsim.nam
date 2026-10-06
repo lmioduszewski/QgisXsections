@@ -1,0 +1,18 @@
+# MODFLOW 6 simulation name file (hand written by tests/data/mf6/make_fixtures.py)
+BEGIN options
+END options
+
+BEGIN timing
+  TDIS6  disv_small.tdis
+END timing
+
+BEGIN models
+  gwf6  disv_small.nam  disv_small
+END models
+
+BEGIN exchanges
+END exchanges
+
+BEGIN solutiongroup  1
+  ims6  disv_small.ims  disv_small
+END solutiongroup  1

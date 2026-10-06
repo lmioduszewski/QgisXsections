@@ -1,0 +1,31 @@
+# Every push and pull request: build the plugin zip and keep it as a workflow artifact.
+# The QGIS tests are not run here (they need a QGIS 4 install); run scripts\run_tests.bat locally.
+name: Build
+
+on:
+  push:
+    branches: ["**"]         # tags are handled by release.yml
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the plugin zip
+        run: python scripts/package.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xsections-plugin-zip
+          path: dist/*.zip
+          if-no-files-found: error

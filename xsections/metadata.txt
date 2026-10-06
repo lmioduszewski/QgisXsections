@@ -1,0 +1,22 @@
+[general]
+name=XSections
+qgisMinimumVersion=4.2
+qgisMaximumVersion=4.99
+description=Geologic cross-sections: LIDAR ground profile with projected explorations, exported at exact horizontal and vertical scales.
+about=Draw or pick a section line, choose a DEM and (optionally) an exploration point layer, filter by type, set a tolerance, and export the section to PDF, PNG or SVG at exact, independent horizontal and vertical scales with a major and minor grid. Add other raster surfaces (water levels, MODFLOW layers) in your own colours, MODFLOW 6 model surfaces and heads, and well screens with measured and at-time-of-drilling water levels. Long sections split across Letter or Tabloid sheets with match lines.
+version=0.3.0
+author=Luke Mioduszewski
+email=luke.mioduszewski@gmail.com
+# repository= and tracker= get the GitHub URLs (the repo and its /issues page) once it is published.
+tags=geology, hydrogeology, cross section, profile, lidar, boreholes, wells, water level, modflow, mf6
+changelog=
+    0.3.0 MODFLOW 6 surfaces: + Add MODFLOW 6… reads a model from its run folder (DISV, DIS or DISU; the binary grid file or the text input; no flopy needed) and draws the model top, layer bottoms, the heads of a chosen layer at a chosen stress period (or time step), and the water table (head of the uppermost wet layer), each restyled like any surface, smooth or flat across each cell. Water levels without a leader (ATD, or no screen) now sit just left of the exploration line.
+    0.2.0 A cleaner, compact panel: sections in drawing order, all closed when the panel opens, each with a one-line summary in its header. Other surfaces: any number of rasters (water levels, MODFLOW layers) drawn as lines in your own colour, style and width, smooth or flat across each model cell, with optional water-table marks; each can stay out of the elevation range. Screens and water levels: a bracket for the screen, the measured level as an open blue triangle joined to the middle of the screen, at-time-of-drilling (ATD) levels as filled blue triangles, several per exploration from a water-level table, as elevations or depths below the top, with optional elevation and date labels. A legend lists the surfaces and symbols on the sheet. The points CSV lists screens and water levels. Fixed an occasional crash when a layer the panel uses is removed from the project. Projects from 0.1.x keep their settings.
+    0.1.2 Compact layout and fill-below are now the defaults: a new project gets the compact layout (title and notes in the margins) with the grid filled below the section in whole major intervals, for more room to draw. Projects saved with 0.1.1 keep their look; projects from 0.1.0 get the new defaults. A manual elevation range is drawn as typed (never filled). All four layout options (compact layout, printer edge, notes, fill the sheet with grid) are under Sheet style.
+    0.1.1 Option to hide the bend lines (Sheet style > Draw bend lines). Removed the red 1-inch check bar and print note from the sheet (measure the grid instead). Licensed under GPL-2.0 (LICENSE file). Sheet layout options for more room to draw (Sheet style): compact layout (one-line title, end letters inline, short notes beside the scale bar), printer edge 0.5 or 0.3 in, notes on/off, and fill the sheet with grid below or above and below (replaces "Fill the rest of the sheet with grid below"; older projects keep their choice). A long title line no longer runs off the sheet or over the end letters, and a wide vertical-scale label ("1,000 ft") stays inside the printer edge.
+    0.1.0 First release: LIDAR ground profile, explorations projected onto the section (tops from the table or LIDAR, bottoms from a bottom elevation or top minus total depth, optional TD labels; explorations optional), exact-scale PDF/PNG/SVG export with separate horizontal and vertical scales, grids, and Letter/Tabloid tiling.
+category=Plugins
+icon=icon.svg
+experimental=True
+deprecated=False
+hasProcessingProvider=no

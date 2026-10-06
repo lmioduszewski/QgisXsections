@@ -1,0 +1,36 @@
+# DIS with an origin and a rotation; arrays from internal, constant, text and binary sources
+BEGIN options
+  LENGTH_UNITS  feet
+  XORIGIN  1201000.0
+  YORIGIN  650800.0
+  ANGROT  30.0
+END options
+
+BEGIN dimensions
+  NLAY  2
+  NROW  3
+  NCOL  4
+END dimensions
+
+BEGIN griddata
+  delr
+    INTERNAL  FACTOR  1.0
+      100.0  150.0  100.0  200.0
+  delc
+    INTERNAL
+      50.0  80.0  60.0
+  top
+    OPEN/CLOSE  'dis_rotated.top.txt'  FACTOR  2.0
+  botm  LAYERED
+    INTERNAL  FACTOR  1.0  IPRN  1
+      490.0  490.5  491.0  491.5
+      490.25  490.75  491.25  491.75
+      490.5  491.0  491.5  492.0
+    OPEN/CLOSE  dis_rotated.botm2.bin  FACTOR  1.0  (BINARY)
+  idomain  LAYERED
+    CONSTANT  1
+    INTERNAL
+      1  1  0  1
+      1  1  1  1
+      1  1  1  1
+END griddata

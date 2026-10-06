@@ -1,0 +1,13 @@
+# MODFLOW 6 groundwater flow model name file
+BEGIN options
+  NEWTON
+END options
+
+BEGIN packages
+  DIS6  dis_rotated.dis  dis
+  IC6  dis_rotated.ic  ic
+  NPF6  dis_rotated.npf  npf
+  CHD6  dis_rotated.chd  chd
+  OC6  dis_rotated.oc  oc
+  OBS6  dis_rotated.obs  head_obs
+END packages

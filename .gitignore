@@ -1,0 +1,26 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Build outputs (scripts/package.py writes dist/xsections-<version>.zip)
+dist/
+build/
+*.egg-info/
+
+# Editor settings (the local .idea is a stale PyCharm/Poetry setup from 2023)
+.idea/
+.vscode/
+*.swp
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+# GDAL writes these next to rasters it opens (test data included)
+*.aux.xml

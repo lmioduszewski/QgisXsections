@@ -1,0 +1,13 @@
+# MODFLOW 6 groundwater flow model name file
+BEGIN options
+END options
+
+BEGIN packages
+  DISV6  disv_small.disv  disv
+  IC6  disv_small.ic  ic
+  NPF6  disv_small.npf  npf
+  STO6  disv_small.sto  sto
+  CHD6  disv_small.chd  chd
+  OC6  disv_small.oc  oc
+  OBS6  disv_small.obs  head_obs
+END packages

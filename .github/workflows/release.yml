@@ -1,0 +1,42 @@
+# Push a tag vX.Y.Z (matching version= in xsections/metadata.txt) to publish a GitHub Release
+# with the installable plugin zip attached.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write            # gh release create
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build the plugin zip
+        run: python scripts/package.py
+
+      - name: Check the tag matches metadata.txt
+        run: |
+          zip="dist/xsections-${GITHUB_REF_NAME#v}.zip"
+          if [ ! -f "$zip" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version= in xsections/metadata.txt (built: $(ls dist))"
+            exit 1
+          fi
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --notes goes above the generated notes: tell colleagues which asset to install
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "XSections ${GITHUB_REF_NAME#v}" \
+            --notes "**Install:** download \`${ZIP#dist/}\` below (not *Source code*), then in QGIS: Plugins > Manage and Install Plugins > Install from ZIP." \
+            --generate-notes
