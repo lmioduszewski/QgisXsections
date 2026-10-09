@@ -1,4 +1,4 @@
-# XSections design (settings version 4)
+# XSections design (settings version 7)
 
 QGIS 4.2.1 plugin (Qt 6, Python 3.12). Draw or pick a section line, sample a LIDAR DEM along it,
 project explorations within a tolerance, and export the section at exact, independent horizontal
@@ -53,7 +53,8 @@ The shared data classes are in `xsections/core/model.py`. Code against them exac
    elevation profile). They are listed in `SectionModel.beyond_ends`.
 4. Printers: Letter and Tabloid normally, rarely a plotter. Default sheet = smallest of
    `allowed_sheets` (["letter", "tabloid"]), landscape first, then portrait. Long sections are
-   **tiled** across sheets with match lines (`tile`, default on).
+   **tiled** across sheets with match lines (`tile`, default on). (Since 0.3.5 this is the *Auto* page
+   orientation; *Landscape* or *Portrait* uses only that one: decision 25.)
 5. CRS: usually EPSG:2926 / EPSG:2927 (US survey feet). Treat ftUS as feet via
    `QgsUnitTypes.fromUnitToUnitFactor(unit, Qgis.DistanceUnit.Feet)` (2 ppm, negligible).
 6. Labels vertical by default; name only by default.
@@ -85,7 +86,8 @@ The shared data classes are in `xsections/core/model.py`. Code against them exac
    notes). A layer id that no longer resolves is still an error, in the panel too: when the chosen layer
    is removed, or a project's saved one is missing, the point box shows none but the panel keeps the id
    (and saves it), so it shows build_section's "no longer in the project" error until another layer, or
-   none, is chosen.
+   none, is chosen. (Since 0.3.3 the explorations are rows of point layers, decision 22: no row is the
+   ground line only, and a ticked row whose layer is gone is the error.)
 
 ## Decisions from the user (2026-10-01: sheet layout options, settings version 3)
 
@@ -181,7 +183,9 @@ the compact layout and the fill below are the defaults (decision 14).
     look follows the user's Water Quality app (navy open-section bar).
 18. **Legend.** `scales.legend_entries`: the line colours by type (as before), the other surfaces, and the screen
     and water level symbols on the sheet; labelled "Line colors:" when it holds types only, else "Legend:". It
-    stands beside the scale bar (compact, or no notes) or under the notes (standard).
+    stands beside the scale bar (compact, or no notes) or under the notes (standard). *(Superseded in part by
+    decision 23, 0.3.4: there are no line colours by type any more; the legend is always labelled "Legend:", and
+    a Color layer lists the colours of its own QGIS style.)*
 
 ## Decisions from the user (2026-10-05, version 0.3.0: MODFLOW 6 surfaces)
 
@@ -220,6 +224,524 @@ the compact layout and the fill below are the defaults (decision 14).
       CRS. Model paths are stored relative to the project file when the project uses relative paths.
     - Caches keyed by (path, mtime, size): warm rebuilds of a section with four F9 surfaces take about 0.01 s.
 
+## Decisions from the user (2026-10-06, version 0.3.1: preview tools)
+
+20. **Preview tools** (`ui/preview.py`, `ui/readout.py`, `core/hover.py`, `MapFeedback.show_cursor`,
+    `core/surfaces_csv.py`, `ui/surfaces_csv_dialog.py`), settled over three mockup rounds. None of it is ever
+    on an export.
+    - **Readout row** above the plot, not a tooltip (the user: a tooltip is distracting and covers things). On
+      hover it shows the distance from the start label (or the station, with station labels), the cursor
+      elevation, then every line, the ground first, with its elevation and depth: "13.6 bgs" below the ground
+      surface, "0.6 ags" above it. The line nearest the cursor is bold and shaded. **Nothing moves while
+      hovering**: each value has a fixed slot sized once per layout for the widest text it can show (the user:
+      cells resizing as "bgs" turned into "above ground" made the row very hard to read). The row wraps only in
+      a narrow dock, at a height fixed per layout. Values are read off the drawn arrays by `core.hover.z_on`
+      the way matplotlib draws them: nan past the line's ends and in gaps ("no DEM data"). (The sheet's
+      water-table marks keep the 0.3.0 rule, `figure._mark_z`; the two differ only at a vertex just before a gap.)
+    - **Explorations:** pointing at one snaps the guide to it, and the row shows its label and type, distance
+      and offset, top and its source, total depth and bottom, the screen (elevations, and depths below the
+      top) and each water level (measured or ATD, date, depth below the top). The map rings it and draws a
+      dashed line to its foot on the section line.
+    - **Map marker:** a navy dot with the distance on the section line at the hovered distance (a canvas item,
+      `MapFeedback.show_cursor`). **Map to preview:** hovering the map within 2.5 × the tolerance of the line
+      (or 15 px; only 15 px on a ground-only section) moves the guide and the row ("On the map: 50 ft right of
+      the line"). Points beyond the ends are ignored. A zoomed preview never scrolls by itself; an edge tag
+      points to a guide that is out of view. No model cell numbers and no click-to-pin (the user).
+    - **Zoom the whole plot** (the user: not matplotlib's rectangle zoom, which only changes what is inside
+      the axes). The wheel magnifies the frame, ticks, labels and data around the mouse, from 100 % (the whole
+      section in the panel) to 800 %, less on high-DPI screens or wide docks (a pixel budget). The canvas sits
+      in a scroll area without scroll bars; a zoom resizes the canvas and raises the figure dpi together, so the
+      layout in inches never changes and the text stays sharp. Drag or Shift+wheel pans; double-click fits.
+      The matplotlib toolbar is gone (the user); the new one has Fit, Zoom out, the percent, Zoom in, Surfaces
+      CSV… and the hover toggle (remembered per user, not per project; two toggles since 0.3.2, decision 21).
+    - **Surfaces CSV…** (the preview toolbar only; no points button there, the user): x = distance along the
+      section, y = elevation, in feet. *One row per point, as drawn* (`surface, part, distance_ft,
+      elevation_ft`; a cell step is two rows; a gap is a row with a blank elevation, then the next part) or
+      *One column per surface* (labels in the top row, x in the first column, then one column of y per surface,
+      every N ft (10 by default) and at each bend and the end). Map coordinates are optional (`map_x, map_y`,
+      off by default). File "Section A-A' surfaces.csv".
+
+## Decisions from the user (2026-10-06/07, version 0.3.2: readout tiles and popup)
+
+21. **The readout row becomes a strip of equal tiles, and the popup comes back as an option** (`ui/readout.py`,
+    `ui/popup.py`, `ui/preview.py`). Supersedes the fixed slots of decision 20. *(Superseded in part by decision
+    23, 0.3.4, the compact strip: N is 1 + the number of lines, the first tile joining the distance and the
+    cursor; the width a tile needs is the widest NUMBER only; one row is about 45 px tall. The popup is
+    unchanged.)*
+    - **Every tile exactly the same width, always** (the user: "It hurts my eyes otherwise"), for the lines and the
+      explorations alike. The strip is a grid of N equal columns, N = the longest row any hover can give for the
+      section (2 + the number of lines, or the longest exploration row; 1 + since 0.3.4, decision 23); a shorter
+      row leaves its last tiles empty. The width a tile needs is measured once per layout (a new section, a font
+      change) from the widest text any tile can show, digits measured as 8 and values in bold (since 0.3.4 the
+      widest number only: labels, details and names are cut with "…", decision 23); a width change only
+      recomputes the tiles per line (min(N, room / need)) and the height (lines of 58 px; 40 px since 0.3.4).
+      Hovering only changes the painted text.
+    - **Elegant, like the round-1 popup:** three lines per tile: a small muted label (with the line's swatch, or the
+      water-level symbol), the value in semibold tabular figures with a muted "ft", and a muted detail ("13.6 bgs",
+      "0.6 ags", "no DEM data", a date and depth, a source). Thin inset dividers; the line nearest the cursor gets a
+      soft tint and a bold value. White in every theme (it continues the plot).
+    - **Popup next to the cursor** (round-1 look): a small white card painted by hand on the preview's viewport,
+      never taking the mouse: the distance and cursor elevation (or the offset from the line for a map hover), a
+      table of every line with its elevation and depth, the nearest tinted, and the map X, Y; for an exploration,
+      its top, total depth, screen and water levels. Placed beside the cursor and kept inside the preview; by the
+      guide for a map hover; hidden off view, while panning and when the mouse leaves.
+    - **Two toggles, "Readout row" and "Popup"**, replace the 0.3.1 crosshair. Both start on and both are remembered
+      between sessions (per user: `hover_strip`, `hover_popup`; the 0.3.1 `hover_readout` value is not read). The
+      guide, dots, axis tags, map marker and map-to-preview hover work while either is on; with both off there is
+      no hover. Turning the row off gives the plot its room (one re-layout).
+    - A screen reaching above the exploration's top reads "0.4 above – 9.6 below top" (never a negative depth).
+
+## Decisions from the user (2026-10-07, version 0.3.3: several exploration layers and other points, settings version 6)
+
+22. **Several exploration layers, the left-off list, layers out of the elevation range, and other points**
+    (`core/model.py`, `core/explorations.py`, `core/others.py`, `core/build.py`; `render/scales.py`,
+    `render/figure.py`; `ui/point_guess.py`, `ui/point_rows.py`, `ui/dock.py`; the hover in `core/hover.py`,
+    `ui/preview.py`, `ui/readout.py`, `ui/popup.py`, `ui/map_feedback.py`). Settled on an approved mockup
+    (version 3, 2026-10-07).
+    - **Rows** (the user: "we usually have explorations by others as a separate QGIS layer").
+      `Settings.point_layers` is a list of exploration rows in panel order (`model.POINT_LAYER_DEFAULTS`, cleaned
+      by `clean_point_layer`): each its own layer, tick (`visible`), legend name (`name`, "" = the layer name),
+      `look` and `color` (the picked colour; gone since 0.3.4, decision 23), `in_range`, label and type fields,
+      ticked `types`, top / bottom elevation / total depth
+      fields, and the screen and water fields (measured level and date, ATD level and date, `wl_values`,
+      `screen_values`, a water-level table with its fields and ATD kinds). Shared by every row, as before (the
+      user: shared rules stay shared): the tolerance, label direction and text, the top rule and its 25 ft check,
+      zero-is-missing, TD labels, screens on or off, the water-level label and the data line colours (gone
+      since 0.3.4: each row's Drawn in, decision 23).
+    - **One way in.** The 21 flat 0.3.2 keys (`model.FLAT_LAYER_KEYS`, `points_layer_id` … `wl_atd_values`) stay in
+      `Settings` as the single-layer shorthand, used only when `point_layers` is empty, through
+      `layer_rows(s)`; everything that needs the rows calls it, never `s.point_layers`. Per-row work reads a
+      per-row view, `layer_view(s, row)` (a `Settings` with the row's fields in the flat keys), so
+      `find_explorations`, `top_and_bottom`, `screen_and_levels`, `read_wl_table` and the hover read a row as they
+      read 0.3.2's one layer; `hit_settings(s, hit)` is a hit's view. The panel always writes rows and leaves the
+      flat keys at their defaults.
+    - **Build.** `build_section` builds every ticked row with one sampler and one ground profile, and stamps each
+      hit with its row (`Hit.layer_index`, `layer_id`, `layer_name` = the legend name, `look`, `color`,
+      `in_range`); `SectionModel.point_layers` holds one `PointLayerInfo` per row (on, plotted, left off, near,
+      beyond). A table shared by two rows is read once. A ticked row whose layer is gone is an error that names
+      the row (when more than one is ticked) and the ways out ("… Choose it again, untick its row or remove
+      it."): decision 9 still holds, explorations are never quietly dropped; a row without a layer chosen is
+      skipped.
+    - **Plot everything chosen** (the user: "I want it to plot everything that I choose, even if they are within
+      1-foot"): no de-duplication between layers, no row wins. Hits sort by (station, row, label).
+    - **Looks** (the user: "Explorations by others should, by default, look no different. But I'd like to be able
+      to style them differently, optionally."): Black (default), Gray (`LOOK_GRAY` #8a8a8a) or Colour (default
+      #b5651d). Gray and colour change the depth line, its bars, top cap, dotted link and frame arrow, and the
+      tick, the name and the TD label (`figure._Painter._look`); the widths stay black's (0.75 pt; 1.6 pt By type).
+      Screens and water levels look the same in every layer. *By type* colours the black rows by type
+      (`type_styles` and `legend_types` read black hits only). The first row's lines are drawn last, on top; one
+      tick call per ink colour, black first. The legend gets one entry per row (`LegendEntry` kind "layer") only
+      when the rows with plotted hits are drawn differently from each other; otherwise it is 0.3.2's legend. With
+      *By type*, a Black row's entry reads "{name} (lines by type)" and its swatch shows the colours its lines are
+      drawn in (up to three, end to end; dark gray only for a line without a type). *(Superseded by decision 23,
+      0.3.4: Drawn in is Black | Gray | Color; Color takes each exploration's colour from the layer's own QGIS
+      style, with black names, ticks and TD; the picked colour #b5651d, Data lines By type, the type palette and
+      the "(lines by type)" entries are gone, and the depth widths are set in Sheet style. Gray, the drawing order
+      and the "drawn differently" rule for Black and Gray rows stay.)*
+    - **The left-off list** (the user: "there could be a separate list of plotted things that generates from my
+      choices in the plugin. I could then manually turn off certain ones"; final answer: left out of the points
+      CSV and the map highlights too). `Settings.hidden_points` holds sorted entries "LINEKEY|LAYERID|FID"
+      (`line_key(s)` = "layerid#fid" for a line feature, "drawn" for a drawn line; `hidden_key`). Built hits whose
+      entry is listed go to `SectionModel.left_off` instead of `hits`, so the sheet, the plan, the points CSV,
+      the map rings, the hover and the flags leave them out with no change of their own. Keyed by layer id and
+      fid (two rows of one layer share an entry; labels repeat), never pruned: an entry for an exploration that
+      is not chosen is inert, and applies again when it is. *Show all* clears the current line's entries; a new
+      drawing clears "drawn"; *Reverse* gives the new line exactly the old line's entries; *Save line to layer*
+      copies them to the new feature; a layer removed and added again under the same name (a new id, the same
+      fids) takes its entries along, a layer of another name never does. That holds for the section-lines layer
+      too (the entries of its lines follow it, and a line box left empty goes back to the line in use), and for a
+      row's layer that a project reopened while the file was unavailable (moved, offline) kept under its name:
+      the row learns the name from the unavailable layer QGIS keeps, so the file added again is taken back with
+      every stored key. Shapefile fids renumber when features are deleted (accepted).
+    - **Out of the elevation range, and the frame arrow** (the user, final answer: no fixed depth). A row with
+      `in_range` off (supply wells to begin with) adds only its tick bases and tops to the automatic range
+      (`scales.hit_in_range`, `_data_extent`); its bottoms, screens and levels add nothing, so the frame is set by
+      the ground, the surfaces and the in-range rows. A hit of such a row that reaches below the frame
+      (`scales.runs_below(h, z_min, s)`: out of range, a depth line, the bottom below `z_min`, the top above it)
+      stops exactly at the frame: no bottom bar, a small chevron (`CLIP_GID`, 0.06 × 0.04 in, tip 0.015 in above
+      the frame, the line's colour and width) and its TD 0.045 in right of the line on a baseline 0.03 in above
+      the frame (always, even with TD labels off: it is the only depth shown; up a row, at most two, on a clash;
+      left of the line near the right edge). A level of a row out of the range outside the frame, and a screen
+      whose top is below it, are not drawn, whether its line runs below the frame or not (no depth, or Depth
+      line off), and the legend and the notes do not list them (`scales.frame_levels`, `frame_screen`; the plan,
+      made before the frame is known, counts them all); the Explorations readout says so ("HW-1 runs below the
+      frame (TD 254′; water level below the frame)", "SW-1: water level below the frame"); hover, popup and CSV
+      keep them. In-range rows under a manual range keep 0.3.2's plain clip. TD labels are laid out by
+      `scales.td_page_layout`, which the sheet and the plan's warnings share: (1) the in-range explorations'
+      under their bars, as always (`td_labels(..., label_hits=...)`: in-range labels set the range, every hit is
+      an obstacle); (2) those of rows out of the range drawn whole; (3) the TDs beside the frame arrows: right of
+      the line (left near the right edge), else the other side, else up a row (two at most), clear of every bar,
+      arrow and TD label (else the spot covering the least of them); (4) the labels of (2) with no row inside the
+      frame: beside the line at its bottom bar, either side, else a row up or down, clear of the same, else left
+      out and named in the plan's "No room for the TD label of …". The notes add "An arrow at the bottom of the
+      frame: the exploration goes deeper; its TD is beside the arrow." when any hit runs below.
+    - **Notes per layer:** each row's tops, bottoms, screens and levels text; identical texts merge, so one layer
+      (or several with the same fields) reads exactly as 0.3.2, and different ones name the layers ("Bottoms:
+      top minus ExploDepth in A and B; top minus WellCompleteDepth in C.", short form "(A and B); (C)";
+      `figure.layer_views`, `depth_sources_text(..., views)`, `screens_sources`; the notes' text lives in the pure
+      `render/notes.py`, which figure.py re-exports and the plan reads).
+    - **Other points** (the user: "point layers of other features, like springs … plotted at LIDAR elevation or
+      some elevation defined in the attribute table"). `Settings.other_points` rows (`model.OTHER_POINT_DEFAULTS`:
+      layer, tick, legend name, label field, optional type field and types, `shape`, `color`, `size`, `elev`,
+      `elev_field`, `elev_empty`), found by `core/others.find_other_points` with the same "within" distance and
+      end caps as the explorations (`explorations._project_points`, shared), in `SectionModel.other_points` and
+      `other_layers`.
+      - Symbol: asterisk (the default, the user: "an 8-pronged, bold blue asterisk for seeps": #1f6fb2, 7 pt,
+        strokes 0.42 × the half size), circle, square, diamond, star or triangle (white-edged), 3 to 20 pt;
+        explicit patches and lines in data coordinates, never matplotlib markers; z 4.8 (`POINT_Z`: over the
+        ground and the water levels, under the ticks).
+      - Elevation `line` (the default; the user: "just slightly off, barely touching the groundline"): the
+        lowest ink sits 0.1 pt (`OTHER_REST_GAP_PT`) above the top of the drawn ground stroke, checked under
+        every lowest point of the symbol, so a slope never cuts it (`scales.rest_on_line` on the exact ink:
+        `symbol_capsules`, `capsule_top`/`capsule_bottom`, `stroke_top`; the ground is read near each sample
+        only, and the preview, drawn small, keeps one vertex per r / 8 of paper, so the cost does not grow with
+        a dense LIDAR line); in a DEM gap, above the nearest ground. `lidar`: the LIDAR at the point's own x, y; the symbol's centre marks it, with a dotted lead from
+        the ground line when the symbol is more than 0.05 in below it; no LIDAR there: the ground line, flagged.
+        `field`: an elevation field (ft), kept but flagged when more than the top rule's limit from LIDAR; where
+        it is empty (zero too, with zero-is-missing), `elev_empty` decides: the ground line, the LIDAR, or off
+        (left out and counted). LIDAR and field points count toward the elevation range.
+      - Label: horizontal, the name (or name and offset, with Label text), centred above the symbol and above
+        the ground line when the symbol is below it, raised clear of the other labels, the exploration marks,
+        the TD labels and every point's symbol, and at least 0.05 in above the ground line's middle under its
+        whole width (on a slope the ground under its uphill end is higher: `scales.ground_top_fn`), with a leader
+        when raised (from the symbol, or from the ground line over a symbol below it) (`scales.other_label_layout`;
+        the plan reserves room with `other_label_top`). A name that exploration leaders run through gets a white
+        box (the leaders pass behind it). A point whose centre a manual range cuts off is left out with its label
+        (its label would stand outside the frame) and named in the plan's warning, like a tick.
+      - Like a surface (decision 15), a point row whose layer is gone is left out with a warning, never an
+        error; a missing elevation field is an error naming the row. Listed in the legend (the symbol, at most
+        6 pt, after the water levels) and the notes ("Seeps within 150 ft of the section line: on the ground
+        line."; "From a field" with no field chosen reads as its "Where it is empty" choice); ringed on the map
+        with the explorations; not in the points CSV. The Other points readout lists up to six flags; the others
+        are in the message line.
+    - **Field guesses** (`ui/point_guess.py`, pure: no widgets): whole names, ignoring case, `_`, `-` and spaces
+      (since 0.3.5 every punctuation mark and a trailing unit in parentheses, decision 24), first match wins,
+      number fields only for number boxes (since 0.3.5 a number box also takes text fields, number fields first,
+      decision 24), and never the layer's primary key (the GeoPackage
+      fid `id`; a saved field that is the key is kept). Labels ExploName, AESI_MapLabel, ExploID, Name, MapLabel,
+      Label, ID; types ExploType_resolved, ExploType, Type; total depth WellCompleteDepth before ExploDepth;
+      measured levels, depth names first (DepthToGW …) then elevation names (WL_Elev … GW_Elev …); the ATD field
+      of the same kind as the measured one (GW_Elev_ATD, DepthToGW_ATD …; without a measured field, elevation
+      names first); a date only with its level (… ExploDate); "Levels are" from the guessed field's kind. A new
+      row is out of the elevation range when its layer's name contains "supply" or it has a WellCompleteDepth
+      field. A fresh project gets an exploration row for each point layer named like explorations (layers panel
+      order, supply-like layers last and unticked, at most 6; with none, the first point layer not named like
+      seeps or springs) and an Other points row for each other layer named like seeps or springs. Guesses are
+      never saved by themselves. Changed on purpose: a fresh CDF_wells project now guesses DepthToGW as depths
+      dated by ExploDate (0.3.2: GW_Elev as elevations, undated); saved projects keep what they have.
+    - **Dates stored as numbers** (`explorations.date_text(value, epoch_ms)`, for number fields): an integral
+      value of at least 1e9 in size is milliseconds since 1970 (UTC calendar, never `fromtimestamp`, which fails
+      for negatives on Windows), written "M/D/YYYY"; before 1900 (the 1899-12-30 zero date) is blank; smaller
+      numbers (YYYYMMDD, a year) are written as they are.
+    - **Type values:** "" in `types` is "(no value)", NULL or empty (`IS NULL`, and `= ''` for a text field); a
+      list without it gives 0.3.2's filter, `[]` every value, `[NO_TYPES]` none.
+    - **Hover** (the user: "Hover over an exploration shows its layer when more than one layer is on; hovering a
+      seep shows it"). `core.hover.hover_targets(model)` = the hits, then the other points (one index for the
+      preview, the readout, the popup and the map). With more than one exploration row on, the lead tile's small
+      print and the popup's first row ("Layer") name the layer. An other point shows its type or layer name,
+      distance and offset, its elevation and where it came from (ground line, LIDAR at the point, the field, or
+      the fallback), and the LIDAR or the ground line beside it; never the water-level titles. Explorations at
+      the same spot (decision 4 plots both: TW-2 and D-447 (TW-2) in his data): the nearest is named (the first
+      row wins a tie), its lead tile says "+N here" and the popup lists the others under "Also here" with their
+      layer (up to 3, then "+N more"). The map rings the plotted explorations and the other points; left-off
+      explorations are not ringed.
+    - **Migration v5 -> v6** (`model.migrate_settings`, after the bottom-field step, so version 1 folds too): a
+      stored single layer becomes `point_layers[0]` (black, legend name "", ticked, in the range, the same
+      fields, types and table) and the flat keys are dropped; stored rows drop them too; no rows and no layer
+      leave them as stored (they draw nothing). A v5 type list keeps its meaning (`[]` includes NULL; an explicit
+      list has no "" and so excludes it). Old projects look exactly as before: `tests/test_compat_032.py` checks
+      five 0.3.2 projects pixel for pixel through three load paths (since 0.3.4 the bytype one against sheets made
+      again with the user's approval, decision 23). Opening one and refreshing writes nothing; the first change
+      saves version 6 (version 7 since 0.3.4, decision 23). 0.3.2 opening a version 6 project
+      sees no explorations (not supported).
+
+## Decisions from the user (2026-10-08, version 0.3.4: compact strip, colours from the QGIS style, depth line widths, grid styling, settings version 7)
+
+23. **A compact readout strip; each exploration's colour from its layer's own QGIS style; depth line widths and
+    grid styling in Sheet style** (`ui/readout.py`, `ui/preview.py`, `core/hover.py`; `core/symbology.py`,
+    `core/model.py`, `core/build.py`; `render/figure.py`, `render/scales.py`; `ui/dock.py`, `ui/point_rows.py`,
+    `ui/widgets.py`). Settled on three approved mockups (the compact strip; exploration colours, round 4; Sheet
+    style). Supersedes parts of decisions 18, 21 and 22 (marked there).
+    - **Compact strip, always** (the user: "It all needs to fit in one row when the width is as small as 700 px.
+      So need to make things smaller."; no full-size mode). For the application's 12 px (9 pt) font: labels, "ft"
+      and details 9 px, values 11 px semibold (bold in the tinted nearest tile), each line 1.2 × its font's size
+      (`readout.LINE_K`, not the font's own leading); text inset 4 px each side, tile margins 1 px, strip padding
+      4 px at the sides and 2 px at the top and bottom, corner radius 4 px, dividers inset 6 px (from the tile
+      box), no minimum tile height; the strip's own swatch 10 × 5 px and water-level symbol 11 × 10 px, 3 px
+      before the label (`STRIP_SWATCH_W/H`, `STRIP_ICON_W/H`; the popup keeps 18 × 8 and 12 × 11). The sizes
+      scale with the font. One row: tiles 38 px tall at a pitch of 40 px, the strip 45 px (Segoe UI 9 pt at
+      96 dpi).
+    - **One row of equal shares.** The tiles of a line share the room equally (every tile the same width,
+      whatever is pointed at; N = 1 + the number of lines, or the longest exploration or point row). A second row
+      only when even the numbers do not fit. **Numbers are never cut** (every value, and the first tile's
+      distance); a label, a detail, or an exploration's or other point's name that does not fit ends in "…", and
+      the popup shows it whole. The name sits in the lead tile's value slot but is not a number: measured, his
+      long supply-well names would set the minimum ("Sammamish Plateau Water and Sewer Well #8" needs 250 px, two
+      tiles a row at 700 px; 140 of his labels are wider than an 8-tile column), against his first requirement,
+      one row at 700 px. A detail that ends with " · off view" or " · +N here" (the endings `preview.py` adds) is
+      cut before that ending, which is drawn whole ("right of t… · off view"); when even the ending does not fit,
+      only the ending is drawn. `cells()` and `text()` keep the full texts (`elided()` and `painted()` are test
+      hooks). Nothing moves or changes width while hovering, as in 0.3.2.
+    - **The numbers-only minimum** (`HoverReadout._tile_need`): the widest number any hover of the section can
+      give, in bold, plus the insets, measured once per section and font (samples: "—", the two elevations, an
+      offset, the line's length as a distance with its digits as 8, and every hit row's tiles from the second
+      on). An exploration's screen value ("525.0–510.0 ft") is the widest: 81 px in Segoe UI 9 pt, so a section
+      with screens fits 8 tiles a row in a 700 px preview (the readout is 4 px narrower than the preview, its
+      layout margins: 696 px, 688 px for the tiles, 86 px each). His CDF model section (where you are, the ground
+      and 6 model lines: 8 tiles) is one row; one line more wraps. Sections without screens fit 11 to 14. "700 px"
+      is the preview widget's width, stricter than the strip's own.
+    - **The first tile joins "From A" and "Cursor"**: label "760 ft from A" ("7+60 from A" with station labels),
+      the distance semibold in the navy of the guide (`Tile.strong`), " from A" muted; value the cursor's
+      elevation, detail its depth ("12.3 bgs" / "0.6 ags"). From the map: value the offset ("50 ft"), detail
+      "right of the line" / "left of the line", ending " · off view" (or "off view" alone) while the guide is
+      outside the zoomed view. No cursor: "—". `HoverReadout.show_values(hv, distance, value, detail=None,
+      off_view=False)`.
+    - **"Ground"** labels the ground tile in the strip; "Ground (<DEM>)" stays in `hover_lines`, the popup and the
+      Surfaces CSV headers.
+    - **Water levels, in the strip only** (`core.hover.strip_cells`): a level's tile is titled by its date
+      ("2/2/2021"), or "Measured" / "ATD" without one, with its symbol; the value its elevation, the detail
+      "11.3 below top". Every other cell is as `target_cells` gives it; the lead cell (the name, with the type in
+      its small print) is never taken for a level. **The popup is unchanged** (it keeps `target_cells`), and so
+      are the toggles, the hover, the map marker and the sync.
+    - **Drawn in: Black | Gray | Color** for each exploration row (the user: "The coloring of the depth lines
+      belongs in the explorations section. The 'Drawn In' options in the explorations section should be 'black,
+      gray, color'. The 'color' option should get its color for each exploration from the QGIS layer styling
+      itself, whatever that is, not the plugin."). No colour picker: the row's `color` key and
+      `LOOK_COLOR_DEFAULT` are gone (`clean_point_layer` drops a stored `color`). Color is the colour of the
+      symbol the layer's own renderer draws that feature with on the map (`core/symbology.py`, read on a clone of
+      the renderer, never started on the layer's own, so the map is never touched; checked on QGIS 4.2.1 by
+      probes):
+      - single symbol, categorized and graduated: the symbol QGIS draws (`symbolForFeature`). The legend item that
+        names it is the feature's own (`legendKeysForFeature`) when that item has the drawn colour, else the last
+        item of that colour: QGIS draws a NULL or unmatched value with the LAST category whose value is NULL or
+        "", while the legend keys name the first;
+      - rule-based (and any other renderer with a legend): the last matching legend item, in the legend's order,
+        that has a symbol (the one drawn on top; `symbolForFeature` is None for every rule-based feature and
+        `symbolsForFeature` wrongly adds the ELSE symbol, so neither is used). A rule switched off in the Layers
+        panel matches nothing, and the ELSE rule does not take its features either (QGIS 4.2.1 does not draw
+        them): black on the sheet, as they are absent on the map;
+      - every scale range of a rule counts (renderer scale 0): the sheet never depends on the map's zoom.
+        Categorized and graduated renderers are read at 1:1 (they have no scale ranges; at scale 0 QGIS 4.2.1
+        draws their switched-off classes too);
+      - point displacement and point cluster renderers are read through the renderer they wrap; a data-defined
+        size legend is left out (removed on the clone: its size classes are not symbols of the layer);
+      - a symbol's colour (`symbol_color`): the first enabled symbol layer with a usable colour gives it: its fill
+        (a data-defined FillColor first) unless that is transparent, near white (every channel at least
+        `NEAR_WHITE`, 230) or the inside of an unfilled marker shape (a cross, a line); else its outline (a
+        data-defined StrokeColor first; not an outline that is not drawn); else the next layer; none: black. So a
+        white or nearly white symbol (a hollow marker) gives its outline colour. Opacity is not drawn;
+      - a feature the style draws with no symbol (an unticked category, no matching rule, a value outside every
+        range) is drawn as Black (DATA at the black width) and is not in the legend. A style that cannot be read
+        draws its row in black with a warning ("Supply wells: its style in QGIS could not be read
+        (RuntimeError); its lines are drawn in black."); the section is still built.
+      `build_section` reads a Color row's style once, before its hits are stamped (plotted and left-off hits
+      alike: `Hit.style_rank`, `Hit.color`; `PointLayerInfo.style`, a `LayerStyle`); Black and Gray rows never
+      read the renderer. The 3-row budget (1.5 s) holds with a row in Color. Tests always give a layer drawn in
+      Color a fixed renderer: a memory layer's default symbol has a random colour (so does his GeoPackage, which
+      has no `layer_styles` table).
+    - **What a Color layer draws** (`figure._Painter._look`): the depth line, its bars and top cap (`mew` = the
+      line width), the dotted ground link (0.6 pt) and the arrow below the frame in each exploration's colour at
+      the Color width; **names, ticks and TD stay black** (its ticks join the black tick call). Gray is as in
+      0.3.3 (line, tick, name and TD gray), at the black width.
+    - **Legend** (`scales.layer_entries`; z-free, only the hits and the settings, so the plan and every sheet
+      agree). A Color row whose explorations are drawn in colour (with a symbol and a depth line on the sheet) is
+      always listed, even alone: one entry (`LegendEntry` kind "style") per colour of its style that is drawn,
+      named as the layer's legend names it, in the layer legend's order; an identical label and colour once
+      across all the Color rows, where it first comes (his own explorations and those by others share one
+      categorized style in Cumberland and Tehaleh, and a By type project opens with both rows in Color: their
+      shared categories are listed once), the same label in two colours twice (Tehaleh has two "IT" rules:
+      everything is keyed by position, never by label). A single-symbol row is listed once, under the row's
+      legend name in its symbol's colour (kind "layer"). Black and Gray rows are listed by name only when the
+      drawn rows are drawn differently (0.3.3's rule; each Color row with coloured lines counts as a kind of its
+      own, and one whose lines all come out black counts as Black). Blank labels: "(no value)" for a NULL or
+      empty category, "(other values)" for an ELSE rule or a blank catch-all, a rule's filter expression (cut to
+      40 characters with "…"), a range's "lower - upper". A swatch is the item's own colour (as QGIS's legend
+      shows it, data-defined colours aside) at the Color width; Black and Gray swatches at the black width (0.3.3
+      drew every layer swatch at 1.6 pt). The label is always "Legend:".
+    - **The sheet follows the layer's style.** The dock connects `styleChanged` of every exploration row's layer
+      (whatever its look, so switching a row to Color needs no new connection; `rendererChanged` always comes
+      with it, and unticking a category or rule in the Layers panel, a new renderer or a new opacity emit it). It
+      re-reads the style of that layer's rows and rebuilds only when one of them is visible and in Color; nothing
+      is saved. A renderer edited in place (from the Python console), which emits nothing, shows at the next
+      rebuild or Refresh.
+    - **The row editor** (`point_rows.ExplorationRow`, section "ui" below): *Drawn in* Black | Gray | Color;
+      under Black and Gray the hint "Black by default, like your own explorations. Gray sets this layer apart;
+      Color takes each exploration's color from this layer's style in QGIS."; under Color the style box, which
+      shows what is read ("From the layer's style in QGIS: Categorized by ExploType · 13 categories", up to four
+      colour chips, "+ 9 more", "Change them in Layer Properties > Symbology; the sheet follows.").
+    - **Data lines (Black | By type) leaves Sheet style**, and the plugin's own type palette goes with it
+      (`TYPE_COLORS`, `TYPE_DASHES`, `type_styles`, `type_colors`, `legend_types`, `DEPTH_TYPE_LW`, the
+      "(lines by type)" entries and "Line colors:").
+    - **Depth lines** (Sheet style, new; the user: "those line width defaults are good. But add adjustable
+      settings in the 'Sheet Style' section separately for black line width and colored line width for the depth
+      lines."): *Black and gray* (`depth_lw_black`, 0.75 pt, 0.25-3) and *Color* (`depth_lw_color`, 1.6 pt,
+      0.25-4), in 0.05 pt steps, and Reset (back to 0.75 / 1.6); `model.depth_widths(s)` cleans them. Gray uses
+      the black width; the bars, top cap and arrow follow the line; the legend swatches follow too.
+    - **Grid: Green | Gray | Custom** (the user: "You should be able to set major and minor gridline color, width,
+      and stroke (solid, dash, dotted). The current default is good and you should be able to quickly reset to
+      that default. So keep the Green and Gray buttons, and add a Custom button"). `model.GRID_PRESETS`: Green
+      (the default; major #5f9a72 0.7 pt, minor #a8c8b2 0.35 pt, solid) and Gray (#6e6e6e / #b4b4b4, the same
+      widths); under a preset one muted line shows its colours and widths. Custom: the major and minor colour (no
+      opacity), width (0.1-3 pt) and line (Solid | Dashed | Dotted), with "Start from Green · Gray". The first
+      Custom starts from the preset in use (`grid_custom_used`, stored with the project, so a reopened project's
+      values are never overwritten by that first start), and Green or Gray never touch the custom values: Custom
+      comes back with them. `model.grid_spec(s)` gives what the sheet and the preview draw. Dashes are absolute
+      lengths on paper (`figure.GRID_DASH_PT`): dashed 4 pt on, 2 pt off; dotted 0.6 pt on, 1.6 pt off with round
+      caps (which add the width, so a dotted line of 1.6 pt or more reads solid). matplotlib multiplies a dash
+      pattern by the line width (`lines.scale_dashes`, pinned True in `figure.RC`: the bends, match lines,
+      surface dashes and ground dots are scaled patterns), so the grid divides its pattern by the width; a
+      pattern starts again at each line's start (a tile's own left edge). A solid line builds exactly 0.3.3's
+      artist. **Saved with the project only** (answer 1): nothing goes to QgsSettings, a new project starts on
+      Green. **The frame stays 0.9 pt black** (answer 2). The preview draws the grid as the sheet does (with its
+      `min_gap`, its widths not scaled); the spacing (major every inch, minor every tenth, or Scale & sheet's
+      manual grid) is unchanged.
+    - **Settings version 7** (`model.migrate_settings`, after the row cleaning). `data_color` is gone: a project
+      that stored "By type" opens with its Black rows in Color (Gray and Color rows kept; a v1-v5 flat project
+      folds into its row first, so it converts too); "black" or no key: nothing else changes; running it twice
+      changes nothing. A 0.3.3 Color row with a picked colour is Color from the layer style (the key dropped).
+      Every load runs `model.clean_sheet_style` (an unknown grid choice or line style dropped, a colour that is
+      not "#rrggbb" dropped, else lower-cased, widths clamped, `grid_custom_used` a bool), and an absent key takes
+      its default (Green, 0.75 / 1.6), so an older project draws as before. Opening and refreshing writes nothing;
+      the first change saves version 7. 0.3.3 opening a version 7 project is not supported (its Color rows get
+      0.3.3's default colour, a Custom grid falls back to Green). The user: "yes it is fine that other, previous
+      projects look different".
+    - **The bytype golden, made again once, with the user's approval** (2026-10-08; the one exception to the
+      compat_032 rule, decision 22). The explorations layer of `test_compat_032.py` gets a frozen categorized
+      renderer (`_type_renderer`: Boring #df9560, Monitoring Well #3fcaa2, Test Pit #80a7ea, CPT #cec063; only
+      Color rows read it), and the gated maker `remake_case` (env `XSECTIONS_REMAKE_GOLDEN=bytype`, only for a
+      case in `REMADE`, settings version 7 or later) wrote the case again: no plan differences
+      (`bytype_plan.json` byte-identical), new `bytype_sheet1.png` and `bytype_sheet2.png`. `bytype.json`,
+      `bytype_hits.json` and `bytype_model.json` are never rewritten (the remake checks that they still match: a
+      hits golden written from 0.3.4's `Hit` would hold a memory layer's random id). basic, wells, manual and
+      ground stay pixel-identical through the three load paths.
+
+## Decisions from the user (2026-10-09, version 0.3.5: Screens are order, numbers stored as text, the row's range box and table label, page orientation, projection direction)
+
+24. **"Screens are" in the order of "Levels are"; numbers stored as text; "In elevation range" beside Total depth;
+    "Water levels from a table"** (`ui/point_rows.py`, `ui/widgets.py`, `ui/point_guess.py`, `ui/dock.py`;
+    `core/explorations.py`, `core/others.py`, `core/build.py`, `render/notes.py`). Fixes and two requests he made
+    on 0.3.4; settings version 7 unchanged.
+    - **Screens are: Elevations | Depths** (the user: "Screens Are should be Elevations then Depths, like Levels
+      Are."). Only the buttons' order changed: `screen_values` still stores "depth" | "elevation", the default is
+      still "depth", the tooltips keep their meaning.
+    - **Number boxes take text fields** (the user: "When I choose an existing, loaded table in QGIS for
+      WATER-LEVEL TABLE, I can't choose a water level field."). His Cumberland "Boring Summary" is a CSV opened
+      by OGR (`ogr`, no geometry), and OGR's CSV driver reads every column as text unless a `.csvt` says
+      otherwise, so the numbers-only Water level box listed nothing and would not open. Every number box (the
+      table's Water level; a row's Top elevation, Bottom elevation, Total depth, Screen top, Screen bottom,
+      Measured level, ATD level; an Other points row's Elevation field) lists number and text fields
+      (`widgets.NUMBER_BOX_FILTERS` = Numeric | String; the box's own icons tell them apart; dates and other
+      kinds stay out). Guesses still prefer number fields (`point_guess.pick_field`): a name that matches a
+      number field wins; a text field is guessed only when no number field matches **and its values are
+      numbers** (`text_ok`: `point_rows.number_texts` reads, only for a text field a guess would take, its first
+      50 values that are not empty in its first 2,000 rows, and one plain number is enough); and the fallback of
+      a box that needs a field is a number field only. So his typed layers guess as before: their text columns
+      hold texts (CDF_wells' String field Elevation_ holds survey sources, "L Green R 2017", "Survey, NAVD 88",
+      and is not guessed as an Other points elevation, as in 0.3.4), while a mixed delimited-text layer ("Detect
+      field types" on: GS Elev a number, "GW Elev. (ft)" text because of an "NA") still gets "GW Elev. (ft)" as
+      the table's level, never GS Elev by the fallback. A field carried over to a newly chosen layer or table
+      that is only a text field there gives way to a number field the guesses match (`pick_field(fresh=True)`);
+      a saved text field is kept, whatever its values. A box that needs a field and gets none (the table's
+      Water level on an all-text table whose level column matches no name, "SWL (ft)", "Reading") shows none:
+      `widgets.set_field` clears it instead of leaving the first field QgsFieldComboBox selects by itself (the
+      name column), and the build asks him to choose ("Choose the name and level fields of the table of water
+      levels …"). Names ignore every punctuation mark and a trailing unit in parentheses ("(ft)", "(m)", "(ft
+      bgs)"; not "(ATD)"): "GW Elev. (ft)" is GW_Elev, now in the table's elevation names, with WL_Elevation,
+      GW_Elevation, WaterLevel and WL after the others ("Water Level (ft)"); with Levels are = Depths the
+      table's depth names come first (DTW …). Also BOH_Elev (bottom elevation) and Depth_BOH (total depth), his
+      column names.
+    - **Reading** (`explorations.to_number`, `text_number`): a text is a number when, trimmed, it is a plain
+      number ("642.3", " 642 ", "-12.5", "1e3") or one with US thousands separators ("1,234.5"); anything else
+      ("NA", "dry", "642.3 ft", "1.234,5", "1_000", "nan") is not a number: left out as NULL is. An empty text
+      (a CSV's empty cell) is no value, as NULL, and is not counted. Zero-is-missing and every other rule are
+      unchanged.
+    - **Flags**: the table of water levels gets one model warning per table field (the whole table counted, once
+      even when several rows read it: `explorations.WlTable.warning`), "Boring Summary: 3 water levels in GW
+      Elev. (ft) are not numbers (left out)."; an exploration's own text fields a flag per hit, 'GS Elev “NA” is
+      not a number: left out' (`not_number_flag`, the text cut at 24 characters); an other point whose
+      elevation text is not a number is placed as for an empty field and flagged 'Elev “dry” is not a number: on
+      the ground line' (or "LIDAR at the point"); with "Where it is empty: Off" it is left out as before.
+    - The rest of the table setup is unchanged (Exploration name matched to the row's label field, case and
+      spaces ignored; no Kind column = every row ATD; Date any type).
+    - **"In elevation range" beside Total depth** (the user: "It is confusing since it is placed below the
+      WATER-LEVEL TABLE. … it should be moved next to the Total Depth drop down."). In *More: depths, water and
+      range* the checkbox (`in_range_box`, "In elevation range", fits half the editor at the 340 px panel; a
+      `point_rows.FitCheckBox` that reads "In range" only while the panel is narrower, 260 px) is the
+      right half of the Total depth pair (`depth_pair`, bottoms aligned), its tooltip the full meaning: "Include
+      this layer's explorations in the automatic elevation range. Unticked, deeper ones stop at the frame with
+      an arrow and their TD."; the hint "Deeper ones stop at the frame with an arrow and their TD." (unticked
+      only) follows that pair. The key `in_range`, its defaults and the supply-well guess are unchanged.
+    - **"Water levels from a table (CSV, Excel…)"** (the user: "At first I thought it was specifically referring
+      to the physical water level table … make the title clearly imply an excel/csv style table."). The row's
+      table box is labelled so (upper case, the whole editor width), tooltip "A spreadsheet-style table (CSV,
+      Excel sheet, or any layer; no geometry needed) with one row per water-level reading: the exploration's
+      name, the level, and optionally its date and kind (measured or ATD)."; the empty choice reads "(none)".
+      Every other text says "table of water levels": the errors ("The table of water levels (Boring Summary) is
+      no longer in the project. Choose it again, or none." with the name while QGIS still holds the layer;
+      "Choose the name and level fields of the table of water levels Boring Summary."; "The level field “X” of
+      the table of water levels is not in Boring Summary. Choose another field."), the notes ("a table of water
+      levels"), the Screens & water hints and the Levels are tooltip. Code names and settings keys
+      (`wl_table_*`) stay.
+
+25. **Page orientation: Auto | Landscape | Portrait** (`core/model.py`, `render/scales.py`, `ui/dock.py`; the
+    user: "I'd like to be able to control the orientation of the paper pages - i.e. portrait vs. landscape. Right
+    now it is chosen automatically. In the Scale & Sheet section, i'd like to have a way to select Auto,
+    Landscape, or Portrait for page orientation. Auto would work like it does now."). Settings version 7
+    unchanged.
+    - `Settings.orientation` (right after `sheet`): "auto" (the default) | "landscape" | "portrait"
+      (`model.ORIENTATIONS`). A stored value is cleaned where the sheet-style keys are (`clean_sheet_style`, run by
+      `migrate_settings` for every version: `clean_orientation`, case and spaces ignored, anything else "auto").
+      No version step: settings saved before 0.3.5 have no key and get Auto, the search they were planned with.
+    - `plan()` (`scales.page_turns`): **Auto** is the search of every earlier version: each candidate sheet (the
+      named one, or the allowed ones smallest first) landscape, then portrait; a section too long for one sheet
+      tiles on the largest allowed (or the named) sheet, landscape, then portrait. **Landscape** and **Portrait**
+      try only that orientation, for one sheet and for tiling alike (with Portrait a long section tiles on portrait
+      sheets). The margins, the block under the plot and the fill estimate are worked out as for Auto (every
+      candidate sheet in both orientations), so a page gets exactly the same layout whichever setting chose it;
+      fill with grid, the notes, the tiling windows and the match lines work as before for the page it gets. A
+      custom page is sized to the drawing and ignores the orientation.
+    - Messages: Auto's are unchanged, word for word. With Landscape or Portrait they name it: "… larger than
+      Letter or Tabloid in portrait. Choose Auto or Landscape, a custom page size, a larger sheet, a smaller scale
+      (more ft per inch), or turn on tiling."; the tiling height message gives only that orientation's room ("…
+      but a Letter sheet has room for 5.00 in (landscape). Choose Auto or Portrait, a smaller vertical scale …");
+      the coarse grid one says "… too coarse to tile on Tabloid sheets in portrait.". "Auto or (the other one)" is
+      offered only when the other orientation would hold the section (on one sheet, or tiled with tiling on),
+      that is when Auto would give sheets.
+    - Panel: under Scale & sheet, a full-width row right under Sheet | Format, **Orientation** Auto | Landscape |
+      Portrait (tooltips "As fits best: landscape first, then portrait (as before)", "Every sheet landscape",
+      "Every sheet portrait"). Disabled while the sheet is Custom, its buttons' tooltip then "Not used with a
+      custom page size: a custom page is sized to the drawing" (the choice is kept for when he leaves Custom).
+      Saved and restored with the project; a change saves and rebuilds through the panel's debounce like the
+      other sheet keys. The export readout and the chip name the sheet as before ("Sheet: Letter 8.5 × 11 in,
+      portrait"; "1,000′ / 50′ · Letter").
+
+26. **The direction on a label is the direction of projection** (`core/explorations.py`, `core/others.py`,
+    `render/notes.py`, `ui/dock.py`; the user: "the projections directions are flipped. The projection should be in
+    reference to the exploration. So if an exploration is north of the cross section line it is projected SOUTH
+    onto the section line."). Settings version 7 unchanged.
+    - `Hit.direction` and `OtherPoint.direction` are the 8-point compass direction of (foot − point), from the
+      exploration (or other point) onto the line: a well 40 ft north of an east-west line reads "S" ("MW-3 · 40 ft
+      S" with Label text "Name + offset and direction"), east of a north-south line "W", north-east of a line
+      running north-west to south-east "SW". Before 0.3.5 (0.3.4 and every earlier version) it was
+      (point − foot), from the line to the exploration (the reverse). On the line (offset ≤ 1e-6 ft) it stays
+      "". Station, offset, side ("L" | "R": where the exploration lies, looking from A to A′) and every geometry
+      are unchanged; the left / right texts of the hover and the popup ("192.4 ft right", "right of the line") say
+      where it lies and are unchanged, as are the end letters' compass directions (the line's).
+    - Texts: the notes "Labels give the distance and direction each exploration was projected onto the section
+      line." (compact: "Labels: distance and direction projected onto the line"); the Label text tooltip
+      'Name + offset: "MW-3 · 40 ft S" = projected 40 ft south onto the line'. The points CSV keeps its column
+      name `direction` (his spreadsheets may use it); its values follow the new meaning.
+    - **The manual golden, made again once, with the user's approval** (he asked for the change, 2026-10-09; the
+      second exception to the compat_032 rule after decision 23's bytype). Only `manual` draws the directions
+      (Label text with offsets), so only it was made again, through the gated maker (`remake_case`, env
+      `XSECTIONS_REMAKE_GOLDEN=manual`, `REMADE`): new `manual_sheet1.png` and `manual_sheet2.png` (the labels'
+      directions and the notes sentence), and in `manual_hits.json` only the six direction values (`NEW_DIRECTIONS`:
+      every other value is the golden's own, checked unchanged); no plan difference (`manual_plan.json` not
+      written), model unchanged. The hits goldens of basic, wells and bytype also hold a direction (0.3.2's; not
+      drawn): they are not rewritten but compared reversed (`test_compat_032.OPPOSITE`, `_hits_golden`). Every
+      other golden is byte-identical; basic, wells, bytype and ground stay pixel-identical through the three load
+      paths.
+
 ## Real data the user works with (copies for tests, never touch originals)
 
 `<scratch>/realdata/CDF_wells.shp`: 8 wells, **EPSG:4326 PointZ** (must be transformed), fields
@@ -227,17 +749,32 @@ the compact layout and the fill below are the defaults (decision 14).
 `ExploElev` (collar, sometimes 0 or wrong), `DepthToGW`, `GW_Elev`.
 `<scratch>/realdata/cdf_lidar.tif`: 2667 x 3127, 1 ft cells, US survey feet, Float64,
 no nodata value, elevations 527-700 ft, WA State Plane South (custom WKT, no EPSG code).
+His `Explorations.gpkg` (17.9 MB; path in `tests/fixtures.GPKG`, or env `XSECTIONS_GPKG`; **read only**: tests
+byte-copy it with `shutil.copy2` and open the copy, sqlite3 only read-only on the copy), all EPSG:4326 points with
+a GeoPackage fid `id`: `Explor_AESI_pt` (32,635: ExploName, ExploType_resolved with 12 types, ExploElev, ExploDepth,
+DepthToGW measured depths, GW_Elev, ExploDate as epoch-millisecond integers), `Explor_Other_pt` (4,722, the same
+names, no water fields) and `Well_Supply_pt` (1,128: AESI_MapLabel, ExploType_resolved with 418 empty and 16
+"SPRING WELL , GRP A/B/DOM", WellStatus, ExploElev, ExploDepth, WellCompleteDepth up to 1,035 ft, GW_Elev_ATD with
+zeros, DepthToGW_ATD, ExploDate as a DATETIME). Springs in the supply layer are wells at a spring zone (the user):
+drawn as supply wells. The GeoPackage has no `layer_styles` table: the layers are styled in his QGIS projects
+(0.3.4, decision 23). Cumberland.qgz: `Explor_AESI_pt` categorized by ExploType (13 categories, the NULL one
+last; `fixtures.CUMBERLAND_AESI`, its literal copy), `Well_Supply_pt` a single symbol #b7484b, `Explor_Other_pt`
+categorized; Tehaleh.qgz: rule-based styles (11 of 14 rules unticked, two "IT" rules in different colours, "EP, TP"
+at 90 % opacity). Tests use those styles as literals (`fixtures.categorized_renderer`, `rule_renderer`,
+`single_renderer`) and never open the project files.
 
 ## Package layout
 
 ```
 xsections/                      plugin folder (users: scripts/package.py zip; developers: install_dev.bat link)
   metadata.txt  __init__.py  plugin.py  icon.svg
-  core/   model.py  units.py  section.py  explorations.py  build.py  mf6.py  mf6_section.py
-  render/ scales.py  figure.py  export.py  pdfprefs.py  _pdf_incremental.py
-  ui/     dock.py  widgets.py  mf6_dialog.py  maptools.py  preview.py  map_feedback.py  settings_store.py
-tests/                          unittest; run with scripts/run_tests.bat (headless)
-  fixtures.py  test_*.py
+  core/   model.py  units.py  section.py  explorations.py  others.py  build.py  mf6.py  mf6_section.py
+          hover.py  surfaces_csv.py  symbology.py
+  render/ scales.py  notes.py  figure.py  export.py  pdfprefs.py  _pdf_incremental.py
+  ui/     dock.py  widgets.py  point_guess.py  point_rows.py  mf6_dialog.py  maptools.py  preview.py  readout.py
+          popup.py  map_feedback.py  surfaces_csv_dialog.py  settings_store.py
+tests/                          unittest; run with scripts/run_tests_parallel.bat (or run_tests.bat: one process)
+  fixtures.py  test_*.py  data/mf6/  data/compat_032/ (the 0.3.2 golden files)
 ```
 
 Owner of each area: core = geometry and data only (no matplotlib, no widgets). render = pages and
@@ -268,16 +805,94 @@ def find_explorations(line, points_layer, settings, crs, sampler, dist_factor, p
         -> tuple[list[Hit], list[str], int]      # hits sorted by station, beyond_ends labels, near_count
     # QgsFeatureRequest with filter expression on type_field IN (types) and a bbox prefilter;
     # transform points to crs; flat end caps; station via lineLocatePoint; side via
-    # closestSegmentWithContext; direction = compass8 of (point - foot); top/bottom per decision 2;
+    # closestSegmentWithContext; direction = compass8 of (foot - point), the direction of projection (0.3.5,
+    # decision 26; before: point - foot); top/bottom per decision 2;
     # flags e.g. "ExploElev 205.6 ft ignored: 454.6 ft from LIDAR", "station in a DEM gap"
 def top_and_bottom(table_top, lidar, table_bottom, depth, settings) -> TopBottom
     # pure (no QGIS): (top, top_source, bottom, bottom_source, total_depth, flags) per decision 2
+    # (0.3.3) find_explorations(..., ground=None, wl_table=None) reads ONE row: pass layer_view(settings, row)
+def _project_points(line, layer, label_field, type_field, types, tol, crs, dist_factor, project,
+                    what="explorations (points)") -> tuple[list[_Cand], list[str], int, int]
+    # the one selection rule of explorations and other points (decisions 3, 22): (candidates, beyond, near, type index)
+def _type_filter(layer, type_i, types) -> str           # "" in types = NULL or empty ("(no value)")
+def date_text(value, epoch_ms=False) -> str             # epoch_ms for number fields: ms since 1970 -> "M/D/YYYY"
+# (0.3.5, decision 24) numbers stored as text
+def to_number(value) -> float | None                    # a text through text_number; NULL, nan -> None
+def text_number(text) -> float | None                   # "642.3", " 642 ", "1e3", "1,234.5"; else None
+def not_number_text(value) -> str                       # the trimmed text of a text that is not a number, else ""
+def not_number_flag(field, text, then="left out") -> str   # 'DTW “dry” is not a number: left out'
+def read_wl_table(settings, project) -> WlTable         # a dict by name_key, with .not_numbers and .warning
+
+# core/others.py (0.3.3)
+def find_other_points(line, layer, row: dict, settings, crs, sampler, dist_factor, project, ground)
+        -> tuple[list[OtherPoint], list[str], int, list[str]]
+    # (points sorted by (station, label), beyond, near, labels left out for want of an elevation); placement
+    # line | lidar | field with the elev_empty fallbacks; flags GAP_FLAG, NO_LIDAR_FLAG, the 25 ft field check;
+    # direction as a Hit's (foot - point, decision 26)
+
+# core/model.py (0.3.3, decision 22): rows, pure
+POINT_LAYER_DEFAULTS, OTHER_POINT_DEFAULTS, FLAT_LAYER_KEYS     # row keys in order; flat name -> row key
+def clean_point_layer(d) / clean_point_layers(v) / clean_other_point(d) / clean_other_points(v) / clean_hidden(v)
+def layer_rows(s) -> list[dict]                  # point_layers cleaned, else [row_from_flat(s)] (flat layer), else []
+def layer_view(s, row) -> Settings               # s with the row's fields in the flat keys (per-row work)
+def hit_settings(s, hit) -> Settings             # the view of the row a hit came from
+def line_key(s) -> str                           # "layerid#fid" | "drawn" | ""
+def hidden_key(line_key, layer_id, fid) -> str   # a left-off entry "LINEKEY|LAYERID|FID"
+def point_legend_name(row, layer_name) -> str    # the row's name, else the layer's
+def as_rows(s) -> Settings                       # s as the panel and a version 6 load give it (tests)
+# SectionModel: hits (plotted only), left_off, point_layers [PointLayerInfo], other_points [OtherPoint],
+#               other_layers [OtherLayerInfo], line_key; has_points = has_explorations or an other row on
+
+# core/model.py (0.3.4, decision 23): sheet style keys and layer styles, pure
+POINT_LOOKS = ("black", "gray", "color")         # color: each exploration in its colour in the layer's own style
+STYLE_KINDS = ("single", "categorized", "graduated", "rule", "other", "none")
+class StyleItem(key, label, color, on=True)      # one legend item with a symbol: QGIS's legend key, its label as
+                                                 # the layer's legend names it, "#rrggbb", ticked in the Layers panel
+class LayerStyle(kind="none", field="", name="", items=[])   # a point layer's style as read (items in legend order)
+# Hit.style_rank (index in its row's LayerStyle.items, -1: no symbol, drawn black); Hit.color (a Color hit's colour,
+# "" without a symbol); PointLayerInfo.style (Color rows: the LayerStyle as built; PointLayerInfo.color "" for them)
+GRID_CHOICES = ("green", "gray", "custom"); GRID_STYLES = ("solid", "dash", "dot")
+GRID_PRESETS = {"green": (("#5f9a72", 0.7, "solid"), ("#a8c8b2", 0.35, "solid")), "gray": ...}   # (major, minor)
+GRID_W_MIN, GRID_W_MAX = 0.1, 3.0
+DEPTH_LW_BLACK, DEPTH_LW_COLOR = 0.75, 1.6       # pt: Black and Gray rows | Color rows
+DEPTH_LW_LIMITS = {"depth_lw_black": (0.25, 3.0), "depth_lw_color": (0.25, 4.0)}
+# Settings: grid_color (green | gray | custom), grid_major_color / _width / _style, grid_minor_..., grid_custom_used,
+#           depth_lw_black, depth_lw_color (all flat scalars; data_color is gone)
+def grid_spec(s) -> ((major colour, pt, style), (minor ...))   # a preset's, or the cleaned custom keys
+def depth_widths(s) -> (black and gray pt, color pt)            # clamped to DEPTH_LW_LIMITS, else the defaults
+# core/model.py (0.3.5, decision 25): page orientation, pure
+ORIENTATIONS = ("auto", "landscape", "portrait")    # Settings.orientation, after `sheet` (default "auto")
+def clean_orientation(value) -> str                 # one of ORIENTATIONS (case and spaces ignored), else "auto"
+def clean_sheet_style(data: dict) -> None                       # in place, on every load (migrate_settings)
+
+# core/symbology.py (0.3.4, decision 23): QGIS core only, no widgets, no matplotlib
+NEAR_WHITE = 230; NO_VALUE_LABEL = "(no value)"; OTHER_VALUES_LABEL = "(other values)"
+def symbol_color(symbol, context=None) -> str   # "#rrggbb": fill, else outline (hollow or near white), else black
+def layer_style(layer) -> LayerStyle            # kind, class field, the items with a symbol (label, colour, on);
+                                                # reads no feature (the row editor)
+def read_styles(layer, fids, project=None) -> (LayerStyle, {fid: (rank, colour)})
+    # the symbol QGIS draws each feature with: symbolForFeature (single, categorized, graduated) or the last
+    # matching legend item (rule-based, other), on a clone of the renderer; (-1, "") when it draws none
 
 # core/build.py
 def build_section(settings: Settings, project: QgsProject) -> SectionModel
     # resolves layers by id, runs everything above, fills warnings; raises SectionError with a
     # message fit for the panel (no DEM chosen, geographic CRS, line off the DEM, etc.);
-    # no explorations layer chosen: a ground-only model (decision 9)
+    # no exploration row: a ground-only model (decision 9); every ticked row through layer_view, one sampler
+    # and one ground profile; a ticked row whose layer is gone: SectionError naming the row; an other-points
+    # row whose layer is gone: left out with a warning (decision 22); a Color row: read_styles once for all its
+    # hits (plotted and left off), a style that can't be read: that row black with a warning (decision 23)
+
+# core/hover.py (0.3.1; 0.3.3 additions)
+def hover_targets(model) -> list                 # model.hits, then model.other_points (one hover index)
+def hover_target(model, index)                   # None for -1 or out of range
+def several_layers(model) -> bool                # more than one exploration row on
+def hit_cells(hit, settings, model=None)         # two arguments: 0.3.2's output; with a model, the layer name
+def other_cells(p, settings, model=None); def target_cells(t, settings, model=None)
+def also_cells(targets, settings, model)         # the popup's "Also here" rows (up to 3, then "+N more")
+def strip_cells(t, settings, model=None)         # (0.3.4) the strip's (title, value, small print, level kind):
+    # target_cells, but a water level titled by its date ("Measured" / "ATD" without one), "11.3 below top", kind
+    # "measured" / "atd" (its symbol); the popup keeps target_cells
 ```
 
 ## render API
@@ -288,13 +903,45 @@ SHEETS = {"letter": (11, 8.5, "Letter"), "tabloid": (17, 11, "Tabloid"), "ansic"
           "archc": (24, 18, "ARCH C"), "ansid": (34, 22, "ANSI D"), "archd": (36, 24, "ARCH D")}
 MARGIN = dict(left=1.0, right=1.5, top=1.2, bottom=2.3)   # standard layout, 0.5 in printer edge
 NOTES_MIN_W = 6.4                                          # width the scale bars + notes need (standard)
-def margins(settings, z_range=None, types=()) -> dict      # left, right, top, bottom: inches, paper edge to frame
+def margins(settings, z_range=None, types=(), block_in=0.0) -> dict   # inches, paper edge to frame
 def notes_min_w(settings, types=()) -> float               # width the block under the plot needs
 def plan(model: SectionModel, settings: Settings) -> Plan
+def page_turns(settings) -> tuple[bool, ...]   # 0.3.5 (decision 25): the `landscape` flags plan() tries per
+                                               # sheet: Auto (True, False), Landscape (True,), Portrait (False,)
+# 0.3.3 (decision 22)
+def hit_in_range(hit) -> bool                              # the row counts toward the automatic range
+def runs_below(hit, z_min, settings) -> bool               # out of range, drawn, bottom below z_min (plan.z_min)
+def td_text(total_depth) -> str                            # "TD 50'"
+def td_labels(hits, settings, plot_length, ground=None, z_range=None, label_hits=None)
+    # the labels of label_hits (default: hits), with the bars and marks of every hit as obstacles
+class LegendEntry(text, kind, key=None, color="")   # (0.3.4) kind: layer|style|surface|screen|measured|atd|point
+    # layer: a row by its legend name (key = the row index; color = a single-symbol Color row's swatch colour, else
+    # ""); style: one colour of a Color row's style (key = the row index, color = the item's colour, text = its label)
+def layer_entries(model, settings) -> list[LegendEntry]    # (0.3.4, decision 23) the rows and the Color rows'
+    # colours (an identical label and colour once across the rows); z-free (only the hits and the settings), so
+    # the plan and every sheet agree
+def legend_entries(model, settings, z_min=None, z_max=None) -> list[LegendEntry]   # layer_entries, surfaces,
+    # screen / water levels (with the frame: those drawn inside it), point rows; the label is always "Legend:"
+def frame_levels(hit, z_min=None, z_max=None) / frame_screen(hit, z_min=None)   # what a frame draws of a hit
+def td_page_layout(hits, settings, x_in, z_in, k, frame_w, y0, y1, z_floor, width_of, marks, crosses)
+    # every TD label of a page (under the bars, beside the lines, beside the arrows); and those left out
+def standard_block_depth(note_texts, entries, width_in) -> float   # the standard layout's notes and legend, inches
+GROUND_LW = 1.1                                            # the drawn ground line, pt (moved here from figure.py)
+class Capsule(ax, ay, bx, by, r)                           # a segment and a radius, inches: the ink of a symbol
+def symbol_capsules(shape, size_pt, k=1.0) -> list[Capsule]; symbol_outline(...) -> polygon; symbol_extent(caps)
+def capsule_top(c, x) / capsule_bottom(c, x) / stroke_top(xs, ys, r, x)       # exact envelopes
+def rest_on_line(gx, gy, x_c, caps, r, gap, thin=False) -> float | None   # the symbol centre resting on a stroke
+def ground_top_fn(stations, zs, x_in, z_in, r) -> top(left, right)   # the ground stroke's top over a span (exact)
+def other_label_layout(xs, anchors, widths, k, frame_w, obstacles, ground_top=None) -> list[LabelSpot]
+def other_label_top(model, settings, plot_length) -> float # the plan's room for the other-point labels, ft
+class PlacedPoint(index, station, z, half_w, below, above, label_top)   # an other point as drawn (for the hover)
 ```
 
 `margins()`: the standard layout with notes keeps `MARGIN`, moved by the printer edge (0.5 in: `MARGIN`;
-0.3 in: 0.2 in less on every side). The compact layout, and the bottom without notes, are added up from
+0.3 in: 0.2 in less on every side); its bottom grows when the notes and legend under the plot need more
+(`block_in`: `plan()` works it out with `standard_block_depth` from the notes as they will read, wrapped at the
+plot's width (the narrowest tile's), at least 6.4 in; never shallower than drawn), so the block never runs into
+the printer edge. The compact layout, and the bottom without notes, are added up from
 what is drawn there, with scales.py's text metrics (one line of DejaVu Sans is 1 em tall as matplotlib
 lays it out, 0.24 em below the baseline) plus `LAYOUT_PAD_IN` (0.03 in), rounded up to 0.01 in:
 - compact top: end-letter row (0.03 in over the frame, 11 pt) + 0.05 in + title row (11 pt);
@@ -306,12 +953,14 @@ lays it out, 0.24 em below the baseline) plus `LAYOUT_PAD_IN` (0.03 in), rounded
 - standard right: `MARGIN` holds the vertical scale's top label up to "100 ft" (it then ends exactly at the
   printer edge); a wider one ("1,000 ft") gets 0.64 + 0.1 in + its width x `RASTER_SLACK` + the pad.
 `z_range` is the elevations the sheet may label (fill included; else a five-digit number is assumed);
-`types` the line-colour legend (rows at the least column width). `notes_min_w`: 6.4 (standard), the
+`types` the legend entries (rows at the least column width). `notes_min_w`: 6.4 (standard), the
 scale bar + 0.25 + 3.6 in of notes (compact), the scale bar alone (no notes; + 2.4 in for a legend).
 
 Rules in `plan()`:
 - Grid = `settings.effective_grid()`. Plot length = `ceil(length / h_minor) * h_minor`.
-- Auto z: `lo = min(ground, bottoms, tick bases, lowest TD label row)`, `hi = max(ground, tops, tick bases)`;
+- Auto z: `lo = min(ground, bottoms, tick bases, lowest TD label row)`, `hi = max(ground, tops, tick bases)`
+  (since 0.3.3 the bottoms, screens, levels and TD labels of in-range rows only, plus LIDAR and field other
+  points with their symbol; `z_max` also clears the other points' labels: decision 22);
   `z_min = floor((lo - below_in * v_scale) / v_major) * v_major` (so `below_in` of grid stays under the
   TD labels too; `scales.td_labels` lays them out as figure.py does),
   `z_max = ceil(max(hi + 0.9 in * v_scale, label_top) / v_major) * v_major`, where `label_top` is the
@@ -323,7 +972,10 @@ Rules in `plan()`:
   the margins of `margins()`.
   `sheet == "smallest"`: first of `allowed_sheets` (in size order) that fits, landscape then portrait.
   Named sheet: that sheet, landscape then portrait. `custom`: page = need rounded up to 0.25 in, min 8.5 x 5.5.
-- Does not fit and `tile` is on: tile horizontally on the largest allowed sheet (or the named one), landscape.
+  (That is `orientation` "auto"; "landscape" or "portrait" tries only that orientation, here and for tiling;
+  a custom page ignores it: decision 25.)
+- Does not fit and `tile` is on: tile horizontally on the largest allowed sheet (or the named one), landscape,
+  else portrait (only the chosen orientation with Landscape or Portrait).
   Core width per sheet = whole number of `h_major`; overlap = one `h_major` each side (clipped at the ends);
   `match_left/right` = core boundaries. Height must fit; otherwise `fits=False` with a message.
 - Does not fit and `tile` off: `fits=False`, message names the needed size and suggests custom size, a
@@ -336,8 +988,21 @@ Rules in `plan()`:
 ```python
 # render/figure.py
 def draw_page(fig: Figure, model, settings, plan, page: PageLayout) -> None     # exact-scale sheet
-def draw_preview(fig: Figure, model, settings, plan) -> None                  # dock preview: fits the figure, same VE
-def display_label(hit, settings) -> str                                       # "MW-3" or "MW-3 · 40 ft N"
+def draw_preview(fig: Figure, model, settings, plan) -> list[PlacedPoint]     # dock preview: fits the figure, same VE;
+                                                                              # returns the other points drawn
+def display_label(hit, settings) -> str                                       # "MW-3" or "MW-3 · 40 ft S"
+                                                     # (offset and direction of projection, decision 26)
+def layer_views(model, settings) -> list[tuple[str, Settings]]               # (row name, its view), rows with hits
+def depth_sources_text(settings, td=False, views=None) -> str                 # one text per distinct row text, merged
+# gids (for tests): CLIP_GID "xsections-below-frame", CLIP_TD_GID / CLIP_TD_HALO_GID, OTHER_GID "xsections-other",
+# OTHER_LEAD_GID, OTHER_LABEL_GID / OTHER_LABEL_HALO_GID, LEGEND_LINE_GID "xsections-legend-line" (0.3.4: a layer
+# or style legend swatch)
+# 0.3.4 (decision 23): GRID_COLORS, MAJOR_LW, MINOR_LW derived from core.model.GRID_PRESETS; FRAME_LW = 0.9;
+# GRID_DASH_PT = {"dash": (4.0, 2.0), "dot": (0.6, 1.6)} (absolute, pt on paper); DEPTH_LW = 0.75 and
+# DEPTH_COLOR_LW = 1.6 (the defaults; the widths drawn come from depth_widths(settings)); RC pins
+# "lines.scale_dashes": True
+def draw_swatch(fig, model, settings, entry, x, y) -> None  # one legend swatch: layer / style a line in the
+    # entry's colour at the Color width, else Gray or black at the black width; points, surfaces, levels as before
 # render/export.py
 def export(model, settings, plan, path: str, fmt: str = "pdf", dpi: int = 300) -> list[str]
     # pdf: one file, one page per sheet (PdfPages), then pdfprefs.add_print_prefs
@@ -356,18 +1021,36 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   never `bbox_inches="tight"`, `tight_layout` or `constrained_layout`; savefig with
   `rc_context({"savefig.bbox": "standard", "savefig.pad_inches": 0, "pdf.fonttype": 42, "svg.fonttype": "none"})`.
   `MultipleLocator.MAXTICKS` raised (default 1000 is too low).
-- Grid: explicit lines at multiples of each interval. Minor 0.35 pt, major 0.7 pt.
-  Colors: green `#a8c8b2` / `#5f9a72`, gray `#b4b4b4` / `#6e6e6e`. Frame 0.9 pt black.
+- Grid: explicit lines at multiples of each interval, as `model.grid_spec(settings)` gives them (Sheet style >
+  Grid, decision 23). Presets: Green (the default) major `#5f9a72` 0.7 pt, minor `#a8c8b2` 0.35 pt; Gray major
+  `#6e6e6e`, minor `#b4b4b4`, the same widths; both solid. Custom: the major and minor colour, width (0.1-3 pt)
+  and line: solid, dashed (4 pt on, 2 pt off) or dotted (0.6 pt on, 1.6 pt off, round caps), the patterns
+  absolute on paper (`GRID_DASH_PT`, divided by the width because matplotlib scales them with it), starting
+  again at each line's start. Solid lines are drawn exactly as before (`solid_capstyle="butt"`, minor z 0.5,
+  major z 0.6). Frame 0.9 pt black, whatever the grid.
 - Ground: 1.1 pt black, broken at nodata; each gap has a dotted link between its edges and a small
   "NO DEM DATA" note under it. Optional light fill below ground drawn under the grid. Drawing order:
   top-to-bottom lines (3.5) < TD halo (4.4) < ground (4.45) < TD text (4.5) < ticks < labels < match notes.
 - Bends: thin dashed vertical line at each bend station, "BEND" above the frame. Optional:
   `Settings.show_bends` (default on; panel: Sheet style > Draw bend lines), sheet and preview alike.
-- Top-to-bottom line (if on and top and bottom exist): 0.75 pt dark gray (#2b2b2b), 1.6 pt type color if
-  `data_color == "type"`; small cross-bar (0.08 in) at the bottom, and the same bar at the top when the
-  top is more than 0.04 in from the ground line (decision 7). If top is below the ground at the station
-  by more than 0.05 in on paper, a dotted link from the ground down to the top.
+- Top-to-bottom line (if on and top and bottom exist): dark gray (#2b2b2b) at the black width (Sheet style >
+  Depth lines, `depth_lw_black`, 0.75 pt by default); small cross-bar (0.08 in) at the bottom, and the same bar
+  at the top when the top is more than 0.04 in from the ground line (decision 7), both as wide as the line. If
+  top is below the ground at the station by more than 0.05 in on paper, a dotted link (0.6 pt) from the ground
+  down to the top. A row drawn Gray (#8a8a8a) uses it for the line, bars, link, tick, name and TD, at the black
+  width. A row drawn in Color (decision 23) draws each exploration's line, bars, top cap, link and frame arrow
+  in the colour of its symbol in the layer's QGIS style, at the Color width (`depth_lw_color`, 1.6 pt by
+  default), with black ink: tick, name and TD stay black; an exploration its style draws with no symbol is
+  drawn as a black one. The first row is drawn on top (decision 22).
 - TD label under each bottom bar (decision 8): "TD 50'", 6.5 pt, rows 0.12 in apart, at most 3.
+- Below the frame (an out-of-range row, decision 22): the line ends at the frame bottom with a chevron
+  (0.03 in half width, 0.04 in tall, tip 0.015 in above the frame, miter joins, z 3.5) and the TD 0.045 in
+  right of the line on a baseline 0.03 in above the frame, with a halo; no bottom bar.
+- Other points (decision 22): the row's symbol (asterisk strokes with round caps, or a filled shape with a
+  0.6 pt white edge and round joins) at z 4.8 (over the water levels 4.6, under the ticks 5): resting on the
+  ground line with 0.1 pt to spare, or centred on its LIDAR or field elevation with a dotted lead (0.6 pt)
+  from the ground line when more than 0.05 in below it; the name 7 pt, horizontal, with a halo, above it
+  (0.02 in) and at least 0.05 in above the ground line, raised clear of the others with a 0.4 pt leader.
 - Tick: 0.9 pt, from `tick_base + 0.04 in` to `+0.18 in` (paper units via `ScaledTranslation`).
 - Label: 7 pt, vertical by default (reads bottom to top), above the tick; labels closer than
   1.18 x font height are spread sideways with thin leader lines (minimal 1-D displacement).
@@ -383,13 +1066,14 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   A BEND label that would overlap an end letter or another BEND label is left out (its line stays).
 - Right of the plot: a vertical graphic scale 1 in tall (5 segments), labelled 0 and "50 ft".
 - Below the plot, from the left safe margin: horizontal graphic scale 2 in (4 segments), then wrapped
-  notes (`show_notes`; without them a line-colour legend stands beside the bar).
+  notes (`show_notes`; without them the legend stands beside the bar).
 - Compact layout (decision 10): one title row and one end-letter row (`compact_rows_in`), the band under
   the distance title (`bottom_band`) with the bar, "HORIZONTAL" after it and `compact_notes` beside it,
   the vertical bar `vbar_dx_in` right of the frame. `compact_notes` gives each line as ranked parts
   (line 1: H and V scales, VE, grid, sheet; line 2: ground (DEM name, no datum: the elevation title has
-  it), explorations, depth sources, "TD = total depth" and the label-offset explanation when those marks
-  are drawn). `fit_compact_notes`: whole lines at 5.8, then 5.5 pt with the bar under the plot's left end;
+  it), explorations, depth sources, "TD = total depth" and the label-offset explanation ("Labels: distance and
+  direction projected onto the line", decision 26) when those marks are drawn). `fit_compact_notes`: whole
+  lines at 5.8, then 5.5 pt with the bar under the plot's left end;
   else the bar moves left (to the printer edge at most) just enough for the whole lines at 5.8, then
   5.5 pt; else `fit_note_line` shortens each line at 5.5 pt: the DEM name cut short with "…" (16
   characters kept), then parts left out one at a time, highest rank first (sheet, grid, VE; Bottoms,
@@ -405,11 +1089,13 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
      (engineer's scale face = k in {10..60} with scale/k in {0.1, 1, 10, 100, 1000}; omit if none,
      so 1 in = 5 ft names the 50 scale)
   2. "Ground: {dem name} ({datum}), sampled every {step} ft. Explorations within {tol} ft of the section
-     line are projected perpendicular onto it." (+ offsets sentence only if offsets are labelled; the
-     explorations sentences only with an explorations layer) + when any line is drawn, the sources
+     line are projected perpendicular onto it." (+ "Labels give the distance and direction each exploration was
+     projected onto the section line." only if offsets are labelled, decision 26; the explorations sentences only
+     with an explorations layer) + when any line is drawn, the sources
      configured: "Tops: ExploElev where available, otherwise LIDAR at the exploration. Bottoms: BotElev
-     where available, otherwise top minus ExploDepth." (adapted to `top_mode` and the empty fields) +
-     "TD = total depth." when TD labels are drawn.
+     where available, otherwise top minus ExploDepth." (adapted to `top_mode` and the empty fields; with rows
+     whose texts differ, "… in A and B; … in C.") + "TD = total depth." when TD labels are drawn (clipped TDs
+     too) + one sentence per other-points row and, when a well runs below the frame, the arrow sentence.
 - Tiles: match line (dashed, dark red) at `match_left/right`, drawn under the ground and the data, with
   "MATCH LINE STA 32+00 · SEE SHEET 2 OF 3" (on two lines, or smaller, when the plot is too short for it;
   always 0.1 in inside the frame); overlap band lightly shaded. The note never covers a TD label, an
@@ -417,7 +1103,9 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   the ground line where it can (its white halo would cut them): candidates along the line in 0.05 in
   steps are scored in that order, then by form (one line, then two, then three shorter lines), side
   (core side, then the overlap band) and nearness to mid-height (`figure._Painter._match_note`).
-- Colored by type: 8 colours, then the same colours dashed, dotted and dash-dotted (legend matches).
+- Legend ("Legend:", decision 23): a Color row's colours as its layer's legend names them, the rows by name when
+  they are drawn differently, the surfaces, screens, water levels and other points; layer and style swatches are
+  lines at the width their lines are drawn at.
 - Notes are drawn one text per wrapped line at a fixed pitch (6.3 pt x 1.3), 0.035 in between notes.
 - The left elevation title keeps the printer edge from the page edge (moved closer to the tick labels if
   needed).
@@ -425,41 +1113,119 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
 ## ui
 
 - Toolbar button toggles the **XSections** dock (right). A second dock **XSections preview** (bottom)
-  holds a `FigureCanvasQTAgg` + `NavigationToolbar2QT` showing `draw_preview`.
-- Panel sections (0.2.0, decision 17; `ui/widgets.py`: collapsible `Section` with a summary chip, `Segmented`
-  with the QComboBox API the code uses, "More" disclosures), top to bottom: Line, Surfaces (the ground row with
-  the DEM, then one row per other surface with an inline editor, + Add surface, + Add all bands…), Explorations,
-  Depths, Screens & water (screen fields, Screen values are Depths | Elevations, Water levels are Elevations |
-  Depths, measured and ATD fields with dates, Print beside the symbol Off | Elevation | Elev. + date, More:
-  water-level table), Scale & sheet, Sheet style (Grid Green | Gray, Data lines Black | By type, Printer edge
-  0.5 | 0.3 in, Fill with grid Off | Below | Both; Compact layout, Notes, Bend lines, Shade below ground). All
+  holds `ui/preview.py`: a toolbar, the hover readout strip (`ui/readout.py`), the optional popup
+  (`ui/popup.py`) and a `FigureCanvasQTAgg` in a zoomable scroll area showing `draw_preview` (decisions 20, 21).
+  The readout strip is compact since 0.3.4 (decision 23): one row of equal tiles (about 45 px) down to a 700 px
+  preview, the first tile "760 ft from A" over the cursor's elevation and depth, "Ground", then each surface;
+  numbers never cut, labels, details and names with "…".
+- Panel sections (0.2.0, decision 17; 0.3.3, decision 22; `ui/widgets.py`: collapsible `Section` with a summary
+  chip, `Segmented` with the QComboBox API the code uses, "More" disclosures), top to bottom: Line, Surfaces (the
+  ground row with the DEM, then one row per other surface with an inline editor, + Add surface, + Add all
+  bands…), Explorations (Point layers "drawn in this order": the exploration rows, + Add point layer, Plotted
+  explorations, Within (all layers) and Labels, Label text), Depths (the line from top to bottom, Label the
+  total depth, More: where tops come from (all layers); the fields are in the rows), Screens & water (screens
+  on or off, Print beside the symbol Off | Elevation | Elev. + date; the fields are in the rows), Other points
+  (its rows, + Add point layer), Scale & sheet (Horizontal | Vertical, Sheet | Format, Orientation Auto | Landscape
+  | Portrait since 0.3.5, off for a custom page: decision 25, Elevations | Split across sheets, Title, More: grid,
+  labels, printers), Sheet style (Grid Green | Gray | Custom, Depth lines, Printer
+  edge 0.5 | 0.3 in, Fill with grid Off | Below | Both; Compact layout, Notes, Bend lines, Shade below ground;
+  0.3.4: Data lines Black | By type is gone, decision 23). All
   closed when the dock is created, reopened, or a project is loaded or cleared; never saved. The open
   header is navy (`#193340`; the palette highlight in a dark theme). Action bar: Refresh, ⋯ (Export points CSV…,
   Save line to layer), Export… The widgets start from `Settings()`.
   Widgets: `QgsMapLayerComboBox` (filtered by geometry/raster), `QgsFieldComboBox` (allow empty where
   optional), `QgsRasterBandComboBox`,
-  `QgsDoubleSpinBox`. Type values: checkable list filled from `layer.uniqueValues(idx)` with counts.
-  Field defaults guessed from whole names, ignoring case, `_`, `-` and spaces, never from a part of a
-  name (label: ExploName, ExploID, Name, ID; type: ExploType, Type; top elevation: ExploElev, TopElev,
+  `QgsDoubleSpinBox`. Type values: a checkable list (`point_rows.TypeList`) counted in one scan of the layer.
+  Field defaults guessed from whole names (`ui/point_guess.py`), ignoring case, spaces and punctuation (`_`, `-`,
+  `.` …) and a trailing unit in parentheses ("GW Elev. (ft)" is GW_Elev; 0.3.5, decision 24), never
+  from a part of a name and never the layer's primary key (label: ExploName, AESI_MapLabel, ExploID, Name,
+  MapLabel, Label, ID; type: ExploType_resolved, ExploType, Type; top elevation: ExploElev, TopElev,
   Top_Elev, GroundElev, GS_Elev, SurfElev, Elevation, Elev; bottom elevation: BotElev, BottomElev,
-  Bottom_Elev, BOT_ELEV, BtmElev, TD_Elev, TDElev; total depth: ExploDepth, TotalDepth, Total_Depth, TD,
-  Depth, Depth_ft, TD_ft; the three elevation/depth boxes only take number fields). Guesses fill a
-  fresh project or a newly chosen point layer; an optional field saved empty stays empty (none).
+  Bottom_Elev, BOT_ELEV, BtmElev, TD_Elev, TDElev, BOH_Elev; total depth: WellCompleteDepth, ExploDepth,
+  TotalDepth, Total_Depth, TD, Depth, Depth_ft, TD_ft, Depth_BOH; the water fields and the rest: decision 22; the
+  number boxes list number and text fields, `widgets.NUMBER_BOX_FILTERS`, and guess number fields first: decision
+  24). Guesses fill a new row or a layer newly chosen in a row; an
+  optional field saved empty stays empty (none).
   Layers in a fresh project: a section line layer only by name (section, xsec, x-sec, profile,
   transect), never an arbitrary line layer; a DEM by name, else the first single-band raster not named
-  like a photo or hillshade; points by name, else the first point layer (the point box also offers
-  "(none: ground line only)", and a none chosen by the user is kept when layers are added). Layers added later
-  (`QgsProject.layersAdded`): a box that is still empty gets the same guess from the new layers, and the
-  field boxes are re-synced to the point box (it auto-selects a new layer but reports `layerChanged(None)`).
+  like a photo or hillshade; the exploration and Other points rows by name (decision 22). Removing the last
+  row is the ground line only, kept when layers are added. Layers added later (`QgsProject.layersAdded`): a
+  box that is still empty, and a row list that is still empty, gets the same guess from the new layers; a
+  row whose layer is missing takes back an added layer of the same name. Guesses never mark the settings as
+  the user's (they are not saved by themselves).
+- **Point-layer rows** (`ui/point_rows.py`, decision 22): `ExplorationRow` and `OtherPointsRow` in a
+  `PointRowList`, each a header (tick, swatch: the look or the symbol, the legend name and a subtitle such as
+  "layer · label field · 3 of 12 types · 38 plotted", ⋯ Move up / Move down / Remove) and an editor opened by
+  clicking the name, in the mockup's order. A row never loses what it was given: while its layer or table is
+  missing (amber), or while layers are being removed, `value()` writes back what it stored, with only the
+  header applied. Filling in code is silent (`changed` only for the user's edits); a type list scans its
+  layer when the row's layer or type field changes and on Refresh, never on a rebuild. `PlottedList`:
+  "Plotted explorations (N of M, K left off by you)", one group per row, sorted by station, each entry
+  "300 ft · 40 ft L", unticked ones struck through, Show all; the dock keeps the entries (`_hidden`).
+- **Drawn in and the style box** (0.3.4, decision 23; `ExplorationRow`): `look_seg` Black | Gray | Color (tooltips
+  "Black, like your own explorations", "Gray, to set this layer apart", "Each exploration in its color in this
+  layer's style in QGIS"), in `field_box("Drawn in", ...)`; no colour button (Other points rows keep theirs).
+  Black and Gray show `look_hint`: "Black by default, like your own explorations. Gray sets this layer apart;
+  Color takes each exploration's color from this layer's style in QGIS." Color shows `style_box` (a
+  `LayerStyleBox`, frame `xsStyleBox`) instead:
+  - `head`: "From the layer's style in QGIS: **Single symbol**" | "**Categorized by {field}** · {n} categories" |
+    "**Graduated by {field}** · {n} ranges" | "**Rule-based** · {n} rules" | "**{renderer name}**" (another
+    kind) | "no symbols (the lines are drawn in black)" | "the layer is not in the project." | "no layer
+    chosen." (n counts every item, on or off; "1 category", "1 range", "1 rule"; a style that cannot be read
+    shows as no symbols, as the build draws it in black);
+  - `chips` (`widgets.StyleChips`: painted, wrapping; an 11 px circle in the colour with a 1 px #232323 border,
+    the label at 0.9 × the font, cut with "…" only when wider than the row, every label in the tooltip): a single
+    symbol one chip, "every exploration"; else the items that are on, those plotted on this section first (the
+    dock passes their keys after each build, `set_plotted_styles`), then the rest in legend order, up to 4, then
+    a muted "+ N more" for the other items that are on;
+  - `off_note` (hidden at 0): "{k} switched off in QGIS: their explorations are drawn in black.";
+  - `foot`: "Change them in Layer Properties > Symbology; the sheet follows." (not for a single symbol, no
+    symbols or a missing layer).
+  The row reads its layer's style (`symbology.layer_style`) when a layer is applied, on a look change, on
+  Refresh and when the layer's style changes (`refresh_style`). The header swatch (`ExploSwatch.set_colors`):
+  Black and Gray their colour; Color the first three chip colours as vertical bars (one colour: the line and cap
+  as before), black when there is no chip (no style, no symbols, a missing layer, every item switched off); the
+  subtitle part "color from the layer style" for Color, "gray" for Gray, nothing for Black.
+- **Following the style** (dock): `_track_layer_signals` connects `styleChanged` of every exploration row's layer
+  (`_explo_layer_ids()`, whatever the look) beside the 0.3.3 signals, kept in `_layer_conns` so untracking
+  disconnects it; `_on_rows_edited` tracks again when a layer it already watches for another reason (an Other
+  points row, a table of water levels) is picked in an exploration row. `_on_point_style_changed(layer_id)` calls
+  `refresh_style()` on that layer's rows and schedules a rebuild only when one is visible and in Color; it
+  never marks the settings as the user's (nothing is saved).
+- **Sheet style** (0.3.4, decision 23; `dock._build_style_group`, in the mockup's order):
+  1. *Grid* Green | Gray | Custom (tooltips "Green engineering pad (the default)", "Gray, for black-and-white
+     printers", "Your own colors, widths and line styles");
+  2. under Green or Gray, `grid_info`, one muted line: a short line in the major colour, "Major 0.7 pt", one in
+     the minor colour, "Minor 0.35 pt", then "solid · the default" (Gray: "solid");
+  3. under Custom, `grid_custom_box`: a small table, columns Color / Width / Line, rows Major and Minor, with a
+     colour button each (no opacity, no menu), a width spin (0.1-3 pt, 2 decimals, 0.05 steps) and an icon-only
+     Solid | Dashed | Dotted control (`widgets.LINE_STYLE_ICONS`, 22 × 8 icons, accessible names Solid, Dashed,
+     Dotted); under it "Major lines every inch, minor every tenth." ("Major and minor lines at the spacing set
+     under Scale & sheet." with the automatic grid off) and "Start from Green · Gray";
+  4. the *Depth lines* sub-heading with a NEW badge (`NEW_BADGE_VERSION = "0.3.4"`: the next feature release
+     removes it in one place) and a Reset link ("Back to 0.75 pt and 1.6 pt"), then *Black and gray* (0.25-3 pt)
+     and *Color* (0.25-4 pt) spins and the hint "Which layers are black, gray or in color is set for each layer,
+     under Explorations > Drawn in."; the spins and Reset are enabled only with the depth line on;
+  5. below a dashed rule, Printer edge and Fill with grid, the four check boxes and "The defaults leave the most
+     room to draw and the paper clear for colored pencil." (unchanged).
+  The first Custom starts from the preset in use (`_grid_last_preset`, tracked because `currentIndexChanged`
+  fires after the old index is gone) unless the project has used Custom before (`grid_custom_used`); Green and
+  Gray never change the custom widgets. "Start from Green / Gray" and Reset set their widgets quietly, then mark
+  one user change (one save, one rebuild). The header chip: "Defaults" when every style key is at its default
+  (`STYLE_KEYS`: the grid choice, the two widths, shade, bends, layout, edge, notes, fill; the custom values only
+  count under Custom), else "Green grid" / "Gray grid" / "Custom grid", plus " · lines 1 / 2.25 pt" when the
+  widths are not 0.75 / 1.6. A fresh or cleared project starts from `Settings()`: Green, 0.75 / 1.6,
+  `grid_custom_used` False; nothing is written to QgsSettings.
 - Section line: line layer combo + feature combo, **Pick on map**, **Draw on map**, **Use selected**,
   **Reverse**, end labels. Draw tool = port of `QgsMapToolProfileCurve` (`QgsMapToolCapture`,
   CaptureLine, `layer()` returns None, emits the captured curve; snapping and CAD dock work).
   Pick tool = `QgsMapToolIdentifyFeature` / `QgsIdentifyMenu.findFeaturesOnCanvas` on line layers.
 - Map feedback (`QgsRubberBand`): section line, flat-cap swath (`buffer(tol, 8, Flat, Round, 2)`),
-  plotted explorations highlighted. Cleared on unload.
+  plotted explorations and other points highlighted (not the ones left off). Cleared on unload.
 - Top-to-bottom line group: [x] Draw a line from top to bottom; Top from (Table, else LIDAR at the
   exploration / LIDAR at the exploration / Table only); Top elevation field; Bottom elevation field;
-  Total depth field (all optional); Treat 0 as missing; Ignore a table top more than [25] ft from LIDAR;
+  Total depth field (all optional; in each row since 0.3.3); Treat 0 as missing; Ignore a table top more than
+  [25] ft from LIDAR;
   [x] Label total depth (TD 50'); the one-line rule "Each exploration: top from the table, else LIDAR;
   bottom from the table, else top − depth."; and a sources readout
   ("Tops: 5 ExploElev, 3 LIDAR · Bottoms: 2 BotElev, 6 top − ExploDepth, 1 none").
@@ -467,27 +1233,82 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   A′ bears 135–315°), DEM coverage and gaps, plotted count / near count / beyond ends / flags (or
   "No explorations layer: ground line only"), top and bottom sources,
   VE / plot area / elevation range / grid below lowest point / sheet and tiles / fit warning.
+  Since 0.3.3: "Plotted N: n1 name1, n2 name2" with several rows on (· K left off by you), the wells below the
+  frame in amber ("HW-1 runs below the frame (TD 254′)", "3 run below the frame: …"), flags with the layer
+  when several rows are on, "No exploration layer is on: ground line and surfaces only."; Other points per
+  row ("Seeps: 4 plotted · …", then one line per point when there are 6 or fewer). Chips: "N plotted",
+  "2 of 3 on · N plotted", "Layer missing" / "2 layers missing" (amber), "Off", "None".
 - Any change (including a new project or layer CRS) -> debounced (300 ms) rebuild + preview. Errors
   (`SectionError`) show in a message line, never a traceback dialog; `Plan.warnings` and model warnings
   not already in a readout show there in amber. In Auto, the disabled min / max show the auto limits.
 - File errors (a PDF or CSV held open by another program) become a message-bar warning. Unreadable
   saved settings fall back to defaults value by value; a failed restore never half-loads the plugin.
-- The preview toolbar has Home, Back, Forward, Pan and Zoom only (no Save: the preview is not to scale).
+- The preview toolbar (decisions 20, 21): Fit, Zoom out, the zoom percent, Zoom in, Surfaces CSV…, and the
+  Readout row and Popup toggles. No Save: the preview is not to scale; files come from Export….
 - **Export…**: file dialog (PDF/PNG/SVG; default name "Section A-A' H1000 V50.pdf"), then `export()`;
   message bar with the file path(s).
   **Save line to layer** (memory layer "XSections lines": start, end, h_scale, v_scale, tolerance).
-  **Export points CSV** (one row per Hit, with top_source, bottom_source (field, shifted, depth or none),
-  depth_ft = top − bottom, total_depth_ft, screen_top_ft, screen_bottom_ft and water_levels, e.g.
-  "652.8 measured 6/12/2025; 640.1 ATD").
+  **Export points CSV** (one row per plotted Hit, left-off ones out, with top_source, bottom_source (field,
+  shifted, depth or none), depth_ft = top − bottom, total_depth_ft, screen_top_ft, screen_bottom_ft and
+  water_levels, e.g. "652.8 measured 6/12/2025; 640.1 ATD", and `layer` last: the row's legend name; other
+  points are not written).
 - Settings persist in the project: `QgsProject.writeEntry("xsections", "settings", settings.to_json())`,
-  restored on project load (older versions migrated, see decisions 2 and 14).
+  restored on project load (older versions migrated, see decisions 2, 14, 22 and 23).
 - Qt6 rules: fully qualified enums (`Qt.AlignmentFlag.AlignLeft`), `exec()` not `exec_()`, import Qt via
   `qgis.PyQt`, no PyQt5 imports, no compiled resources (icon by file path). `unload()` removes every
   action, dock, map tool, rubber band and signal connection.
 
 ## Tests (unittest, headless)
 
-`scripts/run_tests.bat` runs `python -m unittest discover -s tests -v` through the OSGeo4W
+`scripts/run_tests_parallel.bat` (2026-10-09) runs the suite in min(6, CPUs - 1) processes through the OSGeo4W
+`python-qgis.bat` (`scripts/run_tests_parallel.py`; `--workers N`, `--serial`, `--plan`; module, class or test names
+as arguments run just those, in parallel when more than one): about 3.5 minutes for the full suite instead of 10-15.
+Each worker is a plain `python -m unittest -v <names>` with the environment of `run_tests.bat` (plus
+`PYTHONUNBUFFERED=1`, `XSECTIONS_TIME_FACTOR`, its own `MPLCONFIGDIR` seeded with a copy of the font cache, and the
+run's `XSECTIONS_RUN_TAG`), its output in its own log under `%TEMP%\xsections_tests\run_*` (with `summary.txt` and
+`times.json`). The launcher reads each worker's -v stream as it arrives (a test starts when its line reaches the
+pipe, ends when its status does) for per-test, per-class and per-module times, which it remembers in
+`%TEMP%\xsections_tests\durations.json`; modules go longest first to the least-loaded worker, and one longer than
+0.6 of a worker's fair share (and 20 s) is split into its classes and such a class into its tests
+(`test_layout.EveryCombination`'s three tests take 42-121 s each). Splits follow unittest's own loader, not the
+source: before the workers start, one process (the launcher with `--list-tests`, ~3 s) loads the names and reports
+every test id, and a module or class may be split only where loading each of its classes or tests alone gives
+exactly the tests of the whole (so `test_compat_032.Compat032`'s 15 tests made at import time are all there; a class
+imported from another module, or tests made by `load_tests`, keep their module whole; without the list nothing is
+split). At the end every listed test must have started in a worker (or be explained by a set-up error or skip of its
+class or module, or a crashed worker), else the run fails (`not run=k`), and the times are remembered only from such a
+complete run (fix stage of 2026-10-09: before it, a run planned from partial times could drop the generated tests
+and still end `OK`). The summary gives every worker (with its exit status) and module with its time and each failure
+with its traceback, and ends like unittest's (`Ran N tests in X s`, `OK` / `FAILED (...)`, `NO TESTS RAN` with exit
+5 when nothing ran; exit 0 only when all passed). A worker passes only when its exit status is the one `python -m
+unittest` gives for the result it printed (0 for OK, 1 for FAILED, 5 when no test ran and none was skipped): one
+that prints OK and then dies, say in QGIS's shutdown, fails the run as a crashed worker, as `run_tests.bat` would.
+Timing tests (`fixtures.timing_test`: the budgets, the waits for the panel's 300 ms timer, the hover speed) multiply
+their limits and waits by `fixtures.TIME_FACTOR` (`budget()`, `wait_ms()`), from `XSECTIONS_TIME_FACTOR`: 3 under the
+parallel launcher, 1 otherwise, so a serial run checks them exactly as written. When several processes ran, every
+test that failed is run once more, alone in one process with the factor 1; the serial result decides only for a test
+tagged `@timing_test` (the launcher finds the tags in the source with `ast`), any other failure stands. A run in one
+process (`--serial`, `--workers 1`, a single name) is never run again: its result stands. Ctrl+C ends the workers
+(waiting for each) and removes the run's temp folders.
+Isolation (audited 2026-10-09): `RUN_TMP` and the QGIS profile (`QgsSettings` and plain `QSettings` alike) are
+per process (`mkdtemp`); the dense fixture's cache is one file in `%TEMP%\xsec_cache` written under a per-pid name and
+renamed (`os.replace`), so concurrent first runs never open half a file; the real data and `tests/data` are only
+read (tests that change a model copy it to `RUN_TMP` first) and his GeoPackage only through a byte copy (already the
+rule); `test_package` builds into
+`RUN_TMP`; no test uses a fixed port or a fixed temp name; matplotlib's font cache is per worker (above). A test
+process cannot remove its own `RUN_TMP` at exit while QGIS still holds the profile's `symbology-style.db`: the
+launcher removes its processes' folders (named by the run's tag) once they have ended; `run_tests.bat` still leaves
+its ~1 MB `xsec_run_*` folders in `%TEMP%` (three a full run: its own and the two 250 % child processes'). Golden files are never made in parallel: with
+`XSECTIONS_MAKE_GOLDEN` or `XSECTIONS_REMAKE_GOLDEN` set the launcher refuses (exit 2). `test_parallel_runner.py`
+covers the launcher (its reading of a -v stream made by unittest itself, a worker's exit status, the re-run verdict
+and that one process is never run again, the tags, the listing and the splitting along it, the not-run check,
+Ctrl+C, the refusal, a worker's environment; `main()` runs there with its processes replaced) and `TIME_FACTOR`.
+**The test command of the build specs' Hard rules is now the parallel one**, from Git Bash in one Bash call:
+`cd /c/Users/lukem/Python/Projects/qgis-xsections && export PYTHONDONTWRITEBYTECODE=1 XSECTIONS_REALDATA="<the
+copied real-data folder>" && cmd //c "scripts\\run_tests_parallel.bat"` (module names after the .bat for a part;
+`timeout: 600000`; on a busy machine run the full suite with `run_in_background: true`).
+
+`scripts/run_tests.bat` (one process, kept) runs `python -m unittest discover -s tests -v` through the OSGeo4W
 `python-qgis.bat` with `QT_QPA_PLATFORM=offscreen` and `QT_QPA_FONTDIR=C:\Windows\Fonts`.
 `tests/fixtures.py` builds synthetic data (EPSG:2927 DEM in feet with a known plane + valley, points
 at known stations/offsets, a bent line; `make_points_layer(bot_elev=True)` adds a BotElev field whose
@@ -511,12 +1332,130 @@ standard geometry (margins, page placement, elevation limits, notes text) pin th
 (`fixtures.STANDARD_LAYOUT`: `compact_layout=False, fill_grid="off"`), in their settings helpers
 (`test_figure.make_settings`, `test_scales.settings`) or in the test itself.
 
-`test_mf6.py` and `test_mf6_section.py` (0.3.0) cover the MODFLOW 6 readers and sampling with three small real
+`test_hover_csv.py`, `test_preview_tools.py`, `test_map_cursor_csv_dialog.py` and `test_preview_wiring.py`
+(0.3.1) cover the hover values (equal to the drawn arrays, nan past the ends and in gaps), the readout slots
+and height (unchanged over many hovers), the zoom (inches fixed, the point under the mouse kept, no re-layout),
+the map cursor and map-to-preview hover (beyond the ends ignored, nothing left after unload) and both CSV
+layouts; with real data, the CDF section is hovered, zoomed and exported. `test_mf6.py` and `test_mf6_section.py` (0.3.0) cover the MODFLOW 6 readers and sampling with three small real
 models in `tests/data/mf6` (DISV, rotated DIS, DISU; run with mf6 6.7.0, regenerated by `make_fixtures.py`) and,
 with real data, the user's F9_flowV1 (DISV) and CDF_Mounding (DISU) runs. `test_wells_surfaces.py` (0.2.0) covers the other surfaces (stored settings cleaned, cells traced exactly to the
 cell edges, smooth sampling, warnings instead of errors, the elevation range with and without `in_range`, lines,
 marks clear of the explorations, legend) and the screens and water levels (`screen_and_levels` rules for
-depths and elevations, left-out values, the water-level table and its kinds, dates, the drawing: brackets,
+depths and elevations, left-out values, the table of water levels and its kinds, dates, the drawing: brackets,
 leaders from mid-screen, open and filled triangles with their tips on the levels, labels that never overlap, the
 points CSV). `test_panel.py` covers the 0.2.0 panel (all sections closed, segmented controls, round trip of
 every new setting, surface rows, header chips).
+
+0.3.3 (decision 22). `test_compat_032.py` keeps old projects looking exactly as before: golden files of five 0.3.2
+projects (`tests/data/compat_032/`: the version 5 settings, every hit, the plan, the model's warnings, and every
+sheet and preview as PNG), made once from the untouched 0.3.2 tree and never regenerated without the user, are
+compared through `Settings.from_json`, `settings_store.load` and the panel, the PNGs pixel for pixel.
+`test_point_layers.py` covers the cleaners and row helpers and the build of several rows (the sum of each row
+alone, no de-duplication, each row its own fields under the shared rules, one row equal to the flat shorthand, a
+shared table read once, a missing row's error), the left-off list, the type filter with "(no value)", the
+epoch-millisecond dates and the budgets on the 32,000-point GeoPackage fixture (`fixtures.make_dense_layer`);
+`test_other_points_core.py` the selection, the placement with every fallback, the flags and a missing layer left
+out. The dense fixture is made once and kept in the system temp's `xsec_cache`, under a name keyed by its
+generator (a copy in each run's folder was left behind whenever OGR still held it). `test_render_layers.py` covers the looks, the layer legend, the elevation range with rows left out of it, the
+frame arrow and its TD, and the notes per layer; `test_other_points_render.py` the symbol geometry, the resting
+check (measured from the drawn artists, on the plane and the terrain DEM at VE 10 and VE 1, in the sheet, a 300 dpi
+PNG and the preview), the LIDAR and field placement with its lead, and the labels. `test_point_rows.py` covers the
+field guesses on his real field names and the row widgets on their own (round trips in key order, nothing lost
+while a layer or table is missing, silent filling, budgets); `test_panel_layers.py` the dock's rows (guessed,
+added, moved, removed, missing), the left-off list as it follows the line (another line, Show all, Reverse, a new
+drawing, Save line to layer, a layer added again), the readouts, chips and the points CSV, the layer signals, and
+the budgets (a refresh of the 3-row section with the preview at most 3 s; one tick in Plotted explorations is one
+rebuild and no type scan); `test_migration_v6.py` the version 6 migration (one layer becomes the first row, the
+`as_rows` invariant, an older project opened and refreshed is not rewritten). `test_hover_layers.py` covers the
+layer in the hover, the other points in the readout, popup and map, and "+N here" / "Also here". Existing tests
+that drove the 0.3.2 single-layer widgets read the first row instead (`fixtures.explo_row`, `model.layer_rows`,
+`model.as_rows`), with their values unchanged. `test_realdata_gpkg.py`, with real data and his GeoPackage (read
+only: a byte copy is opened, and the original is checked unchanged afterwards; the counts, labels and dates are
+checked only while the file's SHA-256 is that of the file they were measured on), builds the three rows on a dense
+line (38 + 7 + 1 explorations; TW-2 and D-447 (TW-2) both plotted; D-447's TD 280 ft from WellCompleteDepth; epoch
+dates), compares the type totals with a GROUP BY on the file, and, through the panel on a fresh project: the
+guessed rows, D-447 stopping at the frame with its arrow and TD on the sheet, an exploration left off kept through
+a project save and reload and left out of the points CSV, a PDF of the three rows with every label and no layer
+legend (all black), and the panel's budgets.
+
+0.3.4 (decision 23). Layers drawn in Color always get a fixed renderer (`fixtures.single_renderer`,
+`categorized_renderer`, `rule_renderer`; `TYPE_CATS`, and `CUMBERLAND_AESI`, his Cumberland style as a literal;
+`color_model` makes a hand-made model's row Color). `test_symbology.py` covers `symbol_color` (fill, white or
+transparent fill and unfilled shapes to the outline, the 230 threshold, symbol layers in order, a disabled layer,
+data-defined colours per feature), `layer_style` (single, the 13 Cumberland categories in order, an unticked
+category, graduated ranges, nested rules with an ELSE and an inactive rule, displacement and cluster unwrapped,
+heatmap or no renderer: none), `read_styles` per fid (the probe's NULL + "" categories drawn with the later "",
+out-of-range values, overlapping rules taking the last, a feature matched only by an unticked rule not taken by
+ELSE, a scale-ranged rule at scale 0, data-defined size legends left out, only the requested fids, the layer's own
+renderer never started), the build's Color rows (plotted and left-off hits stamped, Black and Gray rows never read
+the style, a style that cannot be read: black with the warning) and the 3-row budget with a row in Color.
+`test_migration_v7.py` covers the new Settings keys and their defaults, `grid_spec`, `depth_widths`,
+`clean_sheet_style` through `from_json` and `settings_store.load`, the v7 step (By type rows to Color, the key
+gone, idempotent, `bytype.json` to one Color row, the store agreeing) and a v6 Color row losing its `color` key.
+`test_render_layers.py` (`ColorLayers`) the Color lines, bars, arrow and black ink, the legend rules (categories in
+legend order, merged and repeated labels, two Color rows of one style listing each colour once, single symbol by
+the row name, black-only and no-depth-line rows, z-free entries, margins) and the depth widths from Sheet style;
+`test_export.py` (`CustomGrid`) the absolute dash and dot patterns at two widths, the SVG dash arrays and a 300 dpi
+PDF raster whose frame still measures exactly.
+`test_sheet_style.py` covers the Sheet style group (the mockup's order and texts, Custom shown only under Custom,
+the first Custom from the preset in use and his values kept through Green and Gray and a project reload, Start
+from in one save and one rebuild, the line-style icons, the spins and Reset, the NEW badge, the chip's states,
+nothing written to QgsSettings, round trips and stored values clamped, the spacing note);
+`test_point_rows.py` (`StyleBox`) the row's style box for every kind, chips, "+ N more", the switched-off note and
+the header swatch; `test_panel_layers.py` (`StyleFollow`) the dock following `styleChanged` (box refreshed and a
+rebuild for a visible Color row only, nothing saved, no re-track on a look change, a layer already watched for
+another row, cleanup). The strip: `test_preview_tools.py` (`CompactStripTest`: the 45 px row, one row of equal
+tiles in a 700 px preview, wrapping only when the numbers do not fit (the ground and 10 surfaces: 12 tiles in
+one row without a screen, 8 a line in Segoe UI 9 pt with MW-2's screen), numbers never cut and names, labels and
+details cut, the kept " · off view" / " · +N here", the navy distance, "Ground"; `RealDataStripTest`: his CDF
+section with six CDF_Mounding surfaces, 8 tiles in one row at 700 px, no fallback) and `test_hover_csv.py`
+(`StripCellsTest`). `test_compat_032.py` gives its explorations a frozen categorized renderer, made the bytype case
+again once (`remake_case`, `XSECTIONS_REMAKE_GOLDEN=bytype`, `REMADE`; plan unchanged, the two sheets new) and checks
+its sheets carry the Boring and Monitoring Well colours (`test_bytype_takes_the_layer_style`); the other four cases
+are still pixel-identical. `test_realdata_gpkg.py` adds, on the byte copy, AESI in Color with his Cumberland style
+(every hit its category's colour read by fid with sqlite, NULL or unmatched values in the catch-all), a Tehaleh-like
+rule-based variant (two rules on, the rest and ELSE off), the 3-row budget with AESI in Color, the Color legend on
+the sheet and in a PDF (categories in Cumberland order, names and ticks black), and the panel's style box
+("Categorized by ExploType · 13 categories", 4 chips, "+ 9 more", following a category switched off).
+
+0.3.5 (decision 24). `test_text_numbers.py` writes real CSV files to the run's temp folder and opens them with
+the `ogr` provider: his Boring Summary's columns (every field a String, asserted; 0.3.4's numeric-only box lists
+none), the row's Water level box listing them, opening and set by a click, kept on a reload; the guesses (GW Elev.
+(ft) for elevations, DTW for depths, a saved field it lacks guessed again; a level column that matches no name
+leaves the box empty, never the name column, and the build asks for it; a text column guessed only when it holds
+numbers: CDF_wells' Elevation_ is not, a mixed table's "GW Elev. (ft)" is), every number box's filter; the build
+reading the table's levels (spaces trimmed, 5e2, no Kind column = ATD), the empty cell not counted and the three
+texts left out with one warning, once for two rows, its own for another field, the 1-level wording, zero is
+missing unchanged; a `.csvt` and a GeoPackage table as before; an exploration row and an Other points row on a CSV
+point layer (X and Y columns) with tops, depths, levels and elevations from text and their flags; his steps in the
+dock. The pure part: `text_number` on good and bad texts, the name matching, number fields first, dates kept out.
+`test_text_numbers.ScreensAre` checks Elevations | Depths with the stored values and the default unchanged.
+Edited for the change: `test_panel` (the screen_values order), `test_ui` (the depth boxes' filter),
+`test_point_rows` (`test_set_field`: a number box keeps a text field; `test_water_rules`: a text DepthToGW is
+guessed when no number field matches). `test_realdata_gpkg.test_budgets` first deletes what earlier tests gave to
+`deleteLater` (`sendPostedEvents(None, DeferredDelete)`), so that flood no longer falls inside its timed wait.
+`test_orientation.py` (decision 25): `plan()` with each orientation on a short section (Letter landscape in Auto;
+Portrait gives Letter 8.5 × 11 at the same plot size), a tall one (Letter portrait in Auto; Landscape goes to Tabloid
+landscape), named sheets, fill with grid on the page it gets (2 majors landscape, 4 portrait), the compact layout,
+a long section tiled (Auto 4 Tabloid landscape; Portrait 8 Tabloid portrait sheets, whole-major cores, one major of
+overlap, cores covering the section), the no-fit messages (Auto's word for word; "in portrait. Choose Auto or
+Landscape, …" only when the other one would do; the tiling height message with only the chosen room; the coarse
+grid), a custom page and unknown values unaffected, a page Auto gives landscape (portrait) identical with
+Landscape (Portrait); the setting (default, place after `sheet`, JSON and project round trips, a bad value ->
+"auto", older settings -> Auto, version 7); the panel control (order, data, tooltips, default Auto, the row right
+under Sheet | Format at full width at 340 and 260 px, disabled with its tooltip for Custom, saved and restored, a
+click starting the debounced rebuild and the real pipeline giving portrait and tiled portrait sheets, readout and
+chip naming the sheet); PDF page boxes (and a PNG's pixels) in the chosen orientation, tiled pages too. Auto is
+checked by the untouched golden / compat tests (`test_compat_032`, `test_scales`).
+`test_explorations.ProjectionDirection` (decision 26): three lines in one layer (east-west, north-south,
+north-west to south-east) and seven wells: a well north of the east-west line reads "S" (south of it "N"), east of
+the north-south line "W" (west "E"), north-east of the third "SW" (south-west "NE"), one on the line "" with
+offset 0; side unchanged; the same wells as other points give the same; the labels ("N-1 · 40 ft S", "E-2 · 30 ft
+W", "NE-3 · 50 ft SW", "ON-1 · 0 ft"), the points CSV's direction column and the notes (standard and compact
+texts). Edited for the change (each with a
+comment): `test_explorations.test_station_offset_side_direction` (the reverse of the side's normal; B-1 "S", MW-1
+"N"), `test_other_points_core` (S-1 "S", S-2 "N"), `test_figure.test_display_label` ("B-1 · 35 ft S"),
+`test_scales.test_headroom_grows_for_long_labels` ("MW-12R · 140 ft SE"), `test_layout` (the compact notes text),
+`test_compat_032` (`REMADE` manual, `NEW_DIRECTIONS`, `OPPOSITE` and `_hits_golden`, the remake writing only the
+direction values and a changed plan, and `test_manual_directions_are_projections`: manual's directions are the
+reverse of basic's, every other value equal).

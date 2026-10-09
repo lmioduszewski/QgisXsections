@@ -19,7 +19,8 @@ from typing import Any, Callable, Optional, Tuple
 
 from qgis.core import QgsProject, QgsSettings
 
-from ..core.model import Settings, clean_surfaces, migrate_settings
+from ..core.model import (Settings, clean_hidden, clean_other_points, clean_point_layers, clean_surfaces,
+                          migrate_settings)
 
 SCOPE = "xsections"
 KEY = "settings"
@@ -70,6 +71,14 @@ def load(project: QgsProject) -> Optional[Settings]:
     Settings saved by an older version are migrated first (model.migrate_settings). Values of the wrong
     kind (a hand-edited project, or one saved by another version) are dropped one by one, so those
     settings take their defaults and the rest still apply.
+
+    Version 6 (0.3.3): an older project's single explorations layer (the flat per-layer keys) comes back as the
+    first exploration row (point_layers), with the same fields, types and water-level table; the rows, the other
+    points and the left-off list are cleaned row by row and key by key (model.clean_point_layers ...).
+
+    Version 7 (0.3.4): a project saved with its data lines coloured by type opens with its Black rows in Color (each
+    exploration's colour from the layer's own style), and the grid and depth line width keys are cleaned or take
+    their defaults (model.migrate_settings, clean_sheet_style).
     """
     text = stored_json(project)
     if not text:
@@ -94,6 +103,8 @@ def load(project: QgsProject) -> Optional[Settings]:
 
 
 _DEFAULTS = Settings()
+_ROW_CLEANERS = {"point_layers": clean_point_layers, "other_points": clean_other_points,
+                 "hidden_points": clean_hidden}
 
 
 def _coerce(value: Any, default: Any, name: str) -> Tuple[bool, Any]:
@@ -104,6 +115,8 @@ def _coerce(value: Any, default: Any, name: str) -> Tuple[bool, Any]:
         return False, None
     if name == "surfaces":                         # a list of dicts, each cleaned key by key
         return (True, clean_surfaces(value)) if isinstance(value, list) else (False, None)
+    if name in _ROW_CLEANERS:                      # point rows (dicts, cleaned key by key) and the left-off list
+        return (True, _ROW_CLEANERS[name](value)) if isinstance(value, list) else (False, None)
     if isinstance(default, bool):
         return (True, value) if isinstance(value, bool) else (False, None)
     if isinstance(default, int):

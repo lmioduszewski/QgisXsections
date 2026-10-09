@@ -5,24 +5,29 @@ feedback -> Export… (PDF and PNG) -> measure the files from their pixels -> un
 
 The iface is qgis.testing's mock, wrapped around a real QMainWindow so the docks are really docked.
 The real-data case runs only when XSECTIONS_REALDATA points at the folder with CDF_wells.shp and
-cdf_lidar.tif; those files are copied to a temp folder first so nothing is ever written next to them.
+cdf_lidar.tif; those files are copied to a temp folder first so nothing is ever written next to them. A second
+real-data case drives the 0.3.1 preview tools (hover readout and map marker, the map cursor, zoom, Surfaces CSV…)
+with the CDF_Mounding MODFLOW 6 surfaces.
 """
+import csv
 import math
 import os
 import re
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
-from tests.fixtures import REALDATA, STANDARD_LAYOUT, default_settings, load_project, start_app
+from tests.fixtures import (REALDATA, STANDARD_LAYOUT, budget, default_settings, explo_row, load_project, start_app,
+                            wait_ms)
 
 APP = start_app()
 
 import numpy as np  # noqa: E402
 from pypdf import PdfReader  # noqa: E402
-from qgis.core import (Qgis, QgsApplication, QgsCoordinateTransform, QgsGeometry, QgsPointXY,  # noqa: E402
-                       QgsProject, QgsRasterLayer, QgsVectorLayer)
+from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsCoordinateTransform,  # noqa: E402
+                       QgsGeometry, QgsPointXY, QgsProject, QgsRasterLayer, QgsVectorLayer)
 from qgis.gui import (QgsAdvancedDigitizingDockWidget, QgsDockWidget, QgsMapToolPan, QgsMessageBar,  # noqa: E402
                       QgsRubberBand)
 from qgis.PyQt import sip  # noqa: E402
@@ -31,6 +36,7 @@ from qgis.PyQt.QtWidgets import QVBoxLayout, QWidget  # noqa: E402
 
 from tests import measure as M  # noqa: E402
 from xsections import classFactory  # noqa: E402
+from xsections.core.model import layer_rows  # noqa: E402
 from xsections.render.pdfprefs import read_print_prefs  # noqa: E402
 from xsections.ui.map_feedback import MapLabel  # noqa: E402
 from xsections.ui.preview import SHEET_GID, main_axes  # noqa: E402
@@ -88,7 +94,7 @@ def wait_for_canvas(canvas, timeout_ms=20000):
     t.start()
     for _ in range(5):                       # refresh() is scheduled on a timer: let it start
         APP.processEvents()
-    while canvas.isDrawing() and t.elapsed() < timeout_ms:
+    while canvas.isDrawing() and t.elapsed() < wait_ms(timeout_ms):
         APP.processEvents()
     APP.processEvents()
 
@@ -101,6 +107,11 @@ def flush_deletes():
 
 def our_canvas_items(canvas):
     return [i for i in canvas.scene().items() if isinstance(i, (QgsRubberBand, MapLabel))]
+
+
+def canvas_receivers(canvas):
+    """Slots connected to the canvas signals the plugin listens to: (the map cursor, the map CRS)."""
+    return canvas.receivers(canvas.xyCoordinates), canvas.receivers(canvas.destinationCrsChanged)
 
 
 def export_via_dock(dock, path, filter_text):
@@ -146,6 +157,7 @@ class E2ECase(unittest.TestCase):
         self.iface, self.mw = make_qgis_window()
         self.canvas = self.iface.mapCanvas()
         self.items_before = len(our_canvas_items(self.canvas))
+        self.receivers_before = canvas_receivers(self.canvas)
         self.plugin = classFactory(self.iface)
         self.plugin.initGui()
         self.addCleanup(self._unload_if_loaded)
@@ -238,7 +250,14 @@ class E2ECase(unittest.TestCase):
             self.assertIsNone(band.scene())
         self.assertIs(canvas.mapTool(), pan)             # the previous map tool is back
         self.assertEqual(plugin._project_signals, [])
+        # the map cursor: nothing listens any more (the map CRS is left out: QGIS's digitizing keeps a slot of
+        # its own once the Draw tool has run; tests/test_preview_wiring checks the plugin's go)
+        self.assertEqual(canvas_receivers(canvas)[0], self.receivers_before[0])
         QgsProject.instance().cleared.emit()             # nothing of ours is connected any more
+        canvas.xyCoordinates.emit(canvas.center())
+        canvas.setDestinationCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
+        APP.processEvents()
+        self.assertEqual(len(our_canvas_items(canvas)), self.items_before)
 
 
 # ------------------------------------------------------------------ synthetic project
@@ -252,7 +271,7 @@ class SyntheticEndToEnd(E2ECase):
         self.open_plugin()
         d = self.dock
         self.assertIs(d.dem_layer.currentLayer(), self.dem)        # guessed from the layer names
-        self.assertIs(d.points_layer.currentLayer(), self.pts)
+        self.assertIs(explo_row(d).layer_combo.currentLayer(), self.pts)
         self.assertTrue(d.compact_layout.isChecked())               # the default layout (0.1.2)
         self.assertEqual(d.fill_grid.currentData(), "below")
 
@@ -283,8 +302,8 @@ class SyntheticEndToEnd(E2ECase):
         self.assertIn("VE <b>20×</b>", exp)
         self.assertIn("Sheet: <b>Letter", exp)
         self.assertTrue(d.message.isHidden(), d.message.text())      # every note is already in a readout
-        counts = {d.type_list.topLevelItem(i).text(0): d.type_list.topLevelItem(i).text(1)
-                  for i in range(d.type_list.topLevelItemCount())}
+        tl = explo_row(d).type_list
+        counts = {tl.topLevelItem(i).text(0): tl.topLevelItem(i).text(1) for i in range(tl.topLevelItemCount())}
         self.assertEqual(counts["Boring"], "3 / 6")
 
         # preview and map
@@ -433,10 +452,13 @@ class RealDataEndToEnd(E2ECase):
         d = self.dock
         # a fresh project: the panel guesses the layers and fields from their names
         self.assertIs(d.dem_layer.currentLayer(), self.dem)
-        self.assertIs(d.points_layer.currentLayer(), self.wells)
+        self.assertIs(explo_row(d).layer_combo.currentLayer(), self.wells)
         s = d.settings()
-        self.assertEqual((s.label_field, s.type_field, s.top_field, s.bottom_elev_field, s.depth_field),
-                         ("ExploName", "ExploType", "ExploElev", "", "ExploDepth"))
+        row = layer_rows(s)[0]
+        self.assertEqual((row["label_field"], row["type_field"], row["top_field"], row["bottom_elev_field"],
+                          row["depth_field"]), ("ExploName", "ExploType", "ExploElev", "", "ExploDepth"))
+        # 0.3.3 (spec section 5): measured depths are guessed before elevations, dated by ExploDate
+        self.assertEqual((row["wl_field"], row["wl_values"], row["wl_date_field"]), ("DepthToGW", "depth", "ExploDate"))
         self.assertTrue(s.td_label)
         self.assertEqual((s.compact_layout, s.edge_margin_in, s.show_notes, s.fill_grid), (True, 0.5, True, "below"))
         # the standard layout, whose notes are checked below (test_layout.RealDataDefaults checks this section's
@@ -483,6 +505,173 @@ class RealDataEndToEnd(E2ECase):
         png = os.path.join(self.out, "CDF A-A.png")
         self.assertEqual(export_via_dock(d, png, "PNG image (*.png)"), [png])
         self.check_png(png, p.pages[0], "green")
+
+        self.check_unload()
+        self.assertEqual(folder_state(REALDATA), self.realdata_state, "nothing written next to the originals")
+
+    def test_cdf_preview_tools(self):
+        """0.3.1 on the real section with the CDF_Mounding MODFLOW 6 surfaces: the hover readout is core's, the map
+        marker follows it (a web mercator map), the map cursor moves the preview's guide, zoom to 400 % around a
+        point and back, Surfaces CSV… in both layouts, then a clean unload."""
+        from tests.test_preview_tools import data_at, move, restore_user_values, save_user_values, settle, vp_of
+        from xsections.core.hover import NO_VALUE, distance_text, elev_text, hover_lines, hover_values
+        from xsections.core.model import SURFACE_DEFAULTS
+        from xsections.core.surfaces_csv import LONG_COLUMNS, unique_names, wide_stations
+        from xsections.ui import preview as P
+        from xsections.ui import settings_store
+        from xsections.ui import surfaces_csv_dialog as D
+        from qgis.PyQt.QtWidgets import QDialog
+
+        saved = save_user_values((P.STRIP_KEY, P.POPUP_KEY, D.LAYOUT_KEY, D.STEP_KEY, D.MAP_XY_KEY,
+                                  "last_export_dir"))
+        self.addCleanup(restore_user_values, saved)
+        for k in (P.STRIP_KEY, P.POPUP_KEY):                          # (the preview reads them when it is made)
+            settings_store.set_user_value(k, "1")
+        self.open_plugin()
+        d, pv, canvas, fb = self.dock, self.plugin.preview, self.canvas, self.dock.feedback
+        geom, tol = line_through_points(self.wells, self.dem.crs(), self.prj)
+        d.tolerance.setValue(tol)
+        d.h_scale.setEditText("200")
+        d.v_scale.setEditText("20")
+        d.set_drawn_line(geom, self.dem.crs())
+        cdf = os.path.join(REALDATA, "mf6", "CDF_Mounding")         # (only read)
+        grb, hds = os.path.join(cdf, "CDF_Mounding.disu.grb"), os.path.join(cdf, "CDF_Mounding.hds")
+
+        def mf6(var, **kw):
+            return dict(SURFACE_DEFAULTS, source="mf6", mf6_path=grb, mf6_head_path=hds, mf6_var=var, z_units="ftUS",
+                        **kw)
+        d.add_model_surfaces([mf6("top", color="#555555", style="dot"), mf6("wt", color="#1f6fb2", style="dash"),
+                              mf6("top", color="#999999", mode="cells")])
+        # the map in web mercator: the marker and the map cursor go through a transform
+        web = QgsCoordinateReferenceSystem("EPSG:3857")
+        canvas.setDestinationCrs(web)
+        d.refresh()
+        self.assertEqual(d.last_error, "")
+        m, s = d.model, d._settings
+        self.assertEqual(len(m.surfaces), 3)
+        self.assertEqual(m.surfaces[2].mode, "cells")
+        sec = QgsCoordinateReferenceSystem.fromWkt(m.section_crs_wkt)
+        ct = QgsCoordinateTransform(sec, web, self.prj)
+        line = QgsGeometry.fromWkt(m.line_wkt)
+        box = QgsGeometry.fromRect(line.boundingBox().buffered(300.0))
+        box.transform(ct)
+        canvas.setExtent(box.boundingBox())
+        APP.processEvents()
+        settle(pv)
+        self.check_preview(len(m.hits))
+        f, length = m.dist_factor, m.length
+        lines = hover_lines(m)
+        events = []
+        pv.hoverChanged.connect(lambda st, i: events.append((st, i)))
+
+        def near(a, b, tol=1e-3):
+            return math.hypot(a.x() - b.x(), a.y() - b.y()) < tol
+
+        def hover_checks(at):
+            """Hover at viewport point `at`: the readout is core's values, the marker is on the line there. False
+            when an exploration is under the mouse (its own row)."""
+            move(pv, at)
+            if pv.readout.mode != "values":
+                return False
+            z0, z1 = sorted(pv._ax.get_ylim())
+            st, cz = data_at(pv, at)
+            hv = hover_values(lines, st, length, min(max(cz, z0), z1))
+            cells = pv.readout.cells()
+            self.assertEqual(cells[0][0], f"{distance_text(st, s)} from A")
+            self.assertEqual([c[1] for c in cells[1:]],
+                             [elev_text(v) if math.isfinite(v) else NO_VALUE for v in hv.values])
+            # the popup by the cursor, inside the view, with the same values
+            self.assertTrue(pv.popup.isVisible())
+            self.assertEqual(pv.popup.header()[0], f"{distance_text(st, s)} from A")
+            self.assertEqual([r[1] for r in pv.popup.rows()],
+                             [elev_text(v).removesuffix(" ft") if math.isfinite(v) else NO_VALUE for v in hv.values])
+            view = pv.scroll.viewport().rect()
+            self.assertTrue(view.contains(pv.popup.card_rect()))
+            # every tile the same width, in its fixed place
+            widths = {r.width() for r in pv.readout.tile_rects()}
+            self.assertEqual(len(widths), 1)
+            self.assertEqual([r for r, _ in pv.readout.shown()], pv.readout.tile_rects()[:len(cells)])
+            self.assertAlmostEqual(events[-1][0], st)
+            self.assertTrue(fb.cursor.isVisible())
+            self.assertTrue(near(fb.cursor.point, ct.transform(line.interpolate(st / f).asPoint())))
+            return True
+
+        z0, z1 = sorted(pv._ax.get_ylim())
+        shown = [hover_checks(vp_of(pv, frac * length, z0 + 0.15 * (z1 - z0))) for frac in (0.11, 0.33, 0.52, 0.74)]
+        self.assertGreaterEqual(sum(shown), 2)
+        # an exploration: its row, and a ring round it on the map
+        h = m.hits[0]
+        move(pv, vp_of(pv, h.station, (h.top + h.bottom) / 2.0))
+        self.assertEqual(pv.readout.mode, "cells")
+        hit = m.hits[events[-1][1]]                                  # (this one, or an equally close neighbour)
+        self.assertTrue(near(fb.ring.asGeometry().vertexAt(0), ct.transform(QgsPointXY(hit.x, hit.y))))
+
+        # the map cursor 50 ft right of the line at mid-length: the guide on the preview
+        st = 0.5 * length
+        foot = line.interpolate(st / f).asPoint()
+        a = line.interpolateAngle(st / f)
+        right = QgsPointXY(foot.x() + math.cos(a) * 50.0 / f, foot.y() - math.sin(a) * 50.0 / f)
+        canvas.xyCoordinates.emit(ct.transform(right))
+        for _ in range(int(budget(200))):
+            if not d._map_timer.isActive():
+                break
+            APP.processEvents()
+            time.sleep(0.002)
+        APP.processEvents()
+        cells = pv.readout.cells()
+        self.assertEqual(cells[0][:3], (f"{distance_text(pv._hover[1], s)} from A", "50 ft", "right of the line"))
+        self.assertEqual(pv.popup.header()[1], "50 ft right of the line")
+        self.assertAlmostEqual(pv._hover[1], st, delta=1e-3)
+        self.assertEqual(cells[0][0], f"{distance_text(pv._hover[1], s)} from A")
+        self.assertTrue(near(fb.cursor.point, ct.transform(foot)))
+        QCoreApplication.sendEvent(canvas.viewport(), QEvent(QEvent.Type.Leave))
+        self.assertEqual(pv.readout.mode, "idle")
+        self.assertFalse(fb.cursor_shown())
+
+        # zoom to 400 % around a point and back; the hover still reads core's values
+        pt = (0.6 * length, z0 + 0.15 * (z1 - z0))
+        anchor = vp_of(pv, *pt)
+        pv.set_zoom(4.0, anchor)
+        settle(pv)
+        self.assertEqual(pv.zoom, min(4.0, pv._z_max))
+        self.assertEqual(pv.zoom_label.text(), f"{round(pv.zoom * 100)}%")
+        got = vp_of(pv, *pt)
+        self.assertLessEqual(math.hypot(got.x() - anchor.x(), got.y() - anchor.y()), 1.0)
+        hover_checks(anchor)
+        pv.fit()
+        settle(pv)
+        self.assertEqual(pv.zoom, 1.0)
+        got = vp_of(pv, *pt)
+        self.assertLessEqual(math.hypot(got.x() - anchor.x(), got.y() - anchor.y()), 1.0)
+        self.assertEqual(pv.last_error, "")
+
+        # Surfaces CSV… (the preview's button), both layouts
+        names = unique_names(ln.name for ln in lines)
+        self.assertEqual(names[-1], "Model top (2)")
+        os.makedirs(self.out, exist_ok=True)
+        for layout in ("long", "wide"):
+            path = os.path.join(self.out, f"CDF surfaces {layout}.csv")
+
+            def fake_exec(dlg, layout=layout):
+                dlg.layout_seg.setCurrentIndex(dlg.layout_seg.findData(layout))
+                dlg.step.setValue(10)
+                dlg.accept()
+                return QDialog.DialogCode.Accepted
+            with mock.patch.object(D.SurfacesCsvDialog, "exec", new=fake_exec), \
+                    mock.patch("xsections.ui.dock.QFileDialog.getSaveFileName", return_value=(path, "CSV (*.csv)")):
+                pv.act_csv.trigger()
+            with open(path, newline="", encoding="utf-8-sig") as fh:
+                rows = list(csv.reader(fh))
+            if layout == "long":
+                self.assertEqual(rows[0], LONG_COLUMNS)
+                for name, ln in zip(names, lines):
+                    self.assertEqual(sum(1 for r in rows[1:] if r[0] == name), ln.stations.size, name)
+            else:
+                self.assertEqual(rows[0], ["distance_ft"] + names)
+                self.assertEqual(len(rows) - 1, wide_stations(m, 10.0).size)
+                self.assertEqual(float(rows[-1][0]), round(length, 2))
+            self.assertEqual(self.iface.messageBar().currentItem().text(),
+                             f"Wrote {len(lines)} surfaces ({len(rows) - 1:,} rows) to {path}")
 
         self.check_unload()
         self.assertEqual(folder_state(REALDATA), self.realdata_state, "nothing written next to the originals")

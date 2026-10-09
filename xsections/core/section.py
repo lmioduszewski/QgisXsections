@@ -414,7 +414,10 @@ def cells_profile(line: QgsGeometry, sampler: "RasterSampler", dist_factor: floa
     d = np.diff(v, axis=0)
     seg_len = np.hypot(d[:, 0], d[:, 1])
     cum = np.concatenate([[0.0], np.cumsum(seg_len)])
-    length = float(cum[-1]) * dist_factor
+    # stations in feet summed as vertex_stations sums them, so the last cell ends exactly at the model length
+    seg_ft = seg_len * dist_factor
+    cum_ft = np.concatenate([[0.0], np.cumsum(seg_ft)])
+    length = float(cum_ft[-1])
     if length <= 0:
         return [], [], 0.0
     exact = sampler.same_crs and float(np.sum(np.abs(d[:, 0]) / sampler.cw + np.abs(d[:, 1]) / sampler.ch)) <= MAX_CELL_EDGES
@@ -438,8 +441,8 @@ def cells_profile(line: QgsGeometry, sampler: "RasterSampler", dist_factor: floa
             if t[-1] < 1.0:
                 t = np.append(t, 1.0)
             tm = (t[:-1] + t[1:]) / 2.0
-            starts.append((cum[i] + t[:-1] * seg_len[i]) * dist_factor)
-            ends.append((cum[i] + t[1:] * seg_len[i]) * dist_factor)
+            starts.append(cum_ft[i] + t[:-1] * seg_ft[i])
+            ends.append(cum_ft[i] + t[1:] * seg_ft[i])
             mids_x.append(ax + tm * dx)
             mids_y.append(ay + tm * dy)
         s0, s1 = np.concatenate(starts), np.concatenate(ends)

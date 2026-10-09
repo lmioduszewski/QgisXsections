@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest import mock
 
-from tests.fixtures import default_settings, load_project, start_app
+from tests.fixtures import budget, default_settings, explo_row, load_project, start_app, timing_test
 
 APP = start_app()
 
@@ -25,7 +25,7 @@ from qgis.PyQt.QtWidgets import QComboBox, QDialog, QFileDialog  # noqa: E402
 from tests.test_ui import fake_model, fake_plan, make_iface  # noqa: E402
 from xsections.core import mf6  # noqa: E402
 from xsections.core.model import (SURFACE_COLORS, SURFACE_DEFAULTS, SectionError, Settings, WaterLevel,  # noqa: E402
-                                  clean_surface)
+                                  as_rows, clean_surface, layer_rows)
 from xsections.ui import settings_store  # noqa: E402
 from xsections.ui.dock import (NO_ATD, XSectionsDock, pretty_label, screens_summary, sheet_short)  # noqa: E402
 from xsections.ui.mf6_dialog import (BOTTOM_COLOR, HEAD_COLOR, LAST_DIR_KEY, WT_COLOR, MF6Dialog,  # noqa: E402
@@ -136,20 +136,23 @@ class SectionTests(PanelCase):
     def test_sections_in_order_and_named(self):
         d = self.dock
         self.assertEqual([s.title() for s in d.sections],
-                         ["Line", "Surfaces", "Explorations", "Depths", "Screens & water", "Scale & sheet",
-                          "Sheet style"])
+                         ["Line", "Surfaces", "Explorations", "Depths", "Screens & water", "Other points",
+                          "Scale & sheet", "Sheet style"])
         self.assertEqual(d.sections, [d.grp_line, d.grp_ground, d.grp_explo, d.grp_depth, d.grp_screens,
-                                      d.grp_export, d.grp_style])
+                                      d.grp_other, d.grp_export, d.grp_style])
+        r = explo_row(d)
         # every widget sits in its section (readouts included)
         for grp, widgets in ((d.grp_line, (d.line_layer, d.btn_pick, d.btn_reverse, d.btn_save_line, d.line_readout)),
                              (d.grp_ground, (d.dem_layer, d.dem_band, d.z_units, d.datum, d.btn_add_surface,
                                              d.btn_add_bands, d.btn_add_mf6, d.ground_readout)),
-                             (d.grp_explo, (d.points_layer, d.type_list, d.label_dir, d.label_text, d.explo_readout)),
+                             (d.grp_explo, (r.layer_combo, r.type_list, d.label_dir, d.label_text, d.explo_readout,
+                                            r.screen_values, r.wl_values, r.wl_table, r.wl_atd_values)),
                              (d.grp_depth, (d.depth_line, d.top_mode, d.top_max_diff, d.td_label, d.depth_readout)),
-                             (d.grp_screens, (d.screens, d.screen_values, d.wl_values, d.wl_table, d.wl_atd_values,
-                                              d.wl_label, d.screens_readout)),
+                             (d.grp_screens, (d.screens, d.wl_label, d.screens_readout)),
+                             (d.grp_other, (d.other_list, d.btn_add_other, d.other_readout)),
                              (d.grp_export, (d.h_scale, d.fmt, d.z_mode, d.tile, d.allowed_sheets, d.export_readout)),
-                             (d.grp_style, (d.grid_color, d.fill_grid, d.compact_layout, d.shade_below))):
+                             (d.grp_style, (d.grid_color, d.fill_grid, d.compact_layout, d.shade_below,
+                                            d.grid_major_color, d.depth_lw_black, d.btn_lw_reset))):
             for w in widgets:
                 self.assertTrue(grp.isAncestorOf(w), (grp.title(), w))
         self.assertIn(d.btn_csv, d.btn_more.menu().actions())          # Export points CSV… in the ⋯ menu
@@ -245,7 +248,7 @@ class ChipTests(PanelCase):
         self.assertEqual(c["Surfaces"], ("Ground + 1", False))         # visible surfaces only
         self.assertEqual(c["Depths"], ("Off", False))
         self.assertEqual(c["Screens & water"], ("Off", False))
-        self.assertEqual(c["Sheet style"], ("Custom", False))
+        self.assertEqual(c["Sheet style"], ("Gray grid", False))
         d.depth_line.setChecked(True)
         d.top_mode.setCurrentIndex(d.top_mode.findData("dem"))
         self.assertEqual(self.chips()["Depths"], ("LIDAR", False))
@@ -263,7 +266,8 @@ class ChipTests(PanelCase):
 
     def test_no_screen_fields(self):
         d = self.dock
-        for c in (d.screen_top_field, d.screen_bottom_field, d.wl_field, d.atd_field):
+        for c in (explo_row(d).screen_top_field, explo_row(d).screen_bottom_field, explo_row(d).wl_field,
+                  explo_row(d).atd_field):
             c.setField("")
         self.stub()
         d.refresh()
@@ -360,13 +364,15 @@ class SegmentedTests(unittest.TestCase):
         prj, *_ = load_project()
         dock = XSectionsDock(make_iface(), None)
         try:
+            dock.restore_from_project()
             expect = {"label_dir": [True, False], "z_mode": ["auto", "manual"],
-                      "distance_labels": ["feet", "station"], "grid_color": ["green", "gray"],
-                      "data_color": ["black", "type"], "edge_margin": [0.5, 0.3], "fill_grid": ["off", "below", "both"],
-                      "screen_values": ["depth", "elevation"], "wl_values": ["elevation", "depth"],
+                      "distance_labels": ["feet", "station"], "grid_color": ["green", "gray", "custom"],
+                      "grid_major_style": ["solid", "dash", "dot"], "grid_minor_style": ["solid", "dash", "dot"],
+                      "edge_margin": [0.5, 0.3], "fill_grid": ["off", "below", "both"],
+                      "screen_values": ["elevation", "depth"], "wl_values": ["elevation", "depth"],
                       "wl_label": ["off", "elev", "elev_date"]}
             for name, data in expect.items():
-                w = getattr(dock, name)
+                w = getattr(explo_row(dock) if name in ("screen_values", "wl_values") else dock, name)
                 self.assertIsInstance(w, SegmentedControl, name)
                 self.assertEqual([w.itemData(i) for i in range(w.count())], data, name)
             self.assertIsInstance(dock.fmt, QComboBox)                  # four choices: stays a combo
@@ -399,7 +405,7 @@ class SurfaceTests(PanelCase):
                              wl_atd_values=["ATD", "Drilling"], wl_label="elev_date")
         d = self.dock
         d.apply_settings(s)
-        self.assertEqual(d.settings(), s)
+        self.assertEqual(d.settings(), as_rows(s))
         self.assertEqual(d.settings().surfaces, [s1, s2])
         self.assertEqual(list(d.settings().surfaces[0]), list(SURFACE_DEFAULTS))      # the keys, in order
         self.assertEqual([r.name_label.text() for r in d.surface_rows], ["Water table 2024", "LIDAR_DEM_3ft"])
@@ -408,8 +414,8 @@ class SurfaceTests(PanelCase):
         empty = default_settings(self.prj, self.dem, self.pts, self.lines, wl_values="elevation",
                                  screen_values="depth", wl_label="off")
         d.apply_settings(empty)
-        self.assertEqual(d.settings(), empty)
-        self.assertEqual(d.wl_field.currentField(), "")                 # an empty saved field stays empty
+        self.assertEqual(d.settings(), as_rows(empty))
+        self.assertEqual(explo_row(d).wl_field.currentField(), "")      # an empty saved field stays empty
         # and through the project
         d.apply_settings(s)
         d._user_changed = True
@@ -417,7 +423,7 @@ class SurfaceTests(PanelCase):
         other = XSectionsDock(self.iface, None)
         try:
             other.restore_from_project()
-            self.assertEqual(other.settings(), s)
+            self.assertEqual(other.settings(), as_rows(s))
         finally:
             other.cleanup()
             other.deleteLater()
@@ -527,7 +533,7 @@ class SurfaceTests(PanelCase):
 # ------------------------------------------------------------------ screens and water levels
 class ScreenTests(PanelCase):
     def test_fields_guessed_for_a_fresh_project(self):
-        d = self.dock
+        d = explo_row(self.dock)
         self.assertEqual((d.screen_top_field.currentField(), d.screen_bottom_field.currentField(),
                           d.wl_field.currentField(), d.wl_date_field.currentField(), d.atd_field.currentField(),
                           d.atd_date_field.currentField()),
@@ -546,16 +552,17 @@ class ScreenTests(PanelCase):
                          ("GW_Elev", QMetaType.Type.QString), ("MeasDate", QMetaType.Type.QDate),
                          ("WL_ATD", QMetaType.Type.Double), ("Drill_Date", QMetaType.Type.QString)])
         self.prj.addMapLayer(lyr)
-        d.points_layer.setLayer(lyr)
-        self.assertEqual((d.screen_top_field.currentField(), d.screen_bottom_field.currentField(),
-                          d.wl_field.currentField(), d.wl_date_field.currentField(), d.atd_field.currentField(),
-                          d.atd_date_field.currentField()),
+        r = explo_row(d)
+        r.layer_combo.setLayer(lyr)
+        self.assertEqual((r.screen_top_field.currentField(), r.screen_bottom_field.currentField(),
+                          r.wl_field.currentField(), r.wl_date_field.currentField(), r.atd_field.currentField(),
+                          r.atd_date_field.currentField()),
                          ("Scr_Top_ft", "Screen_Bottom", "DepthToGW", "MeasDate", "WL_ATD", "Drill_Date"))
-        self.assertEqual(d.wl_values.currentData(), "depth")           # guessed from a depth name
-        self.assertEqual(d.settings().wl_values, "depth")
-        d.points_layer.setLayer(self.pts)                               # back: GW_Elev is an elevation
-        self.assertEqual(d.wl_field.currentField(), "GW_Elev")
-        self.assertEqual(d.wl_values.currentData(), "elevation")
+        self.assertEqual(r.wl_values.currentData(), "depth")           # guessed from a depth name
+        self.assertEqual(layer_rows(d.settings())[0]["wl_values"], "depth")
+        r.layer_combo.setLayer(self.pts)                                # back: GW_Elev is an elevation
+        self.assertEqual(r.wl_field.currentField(), "GW_Elev")
+        self.assertEqual(r.wl_values.currentData(), "elevation")
 
     def test_saved_wl_values_are_never_overridden(self):
         lyr = QgsVectorLayer("Point?crs=EPSG:2927", "Wells", "memory")
@@ -565,64 +572,67 @@ class ScreenTests(PanelCase):
         s = default_settings(self.prj, self.dem, lyr, self.lines, label_field="Name", wl_field="DepthToGW",
                              wl_values="elevation", type_field="", top_field="", depth_field="")
         d.apply_settings(s)
-        self.assertEqual(d.wl_values.currentData(), "elevation")
+        self.assertEqual(explo_row(d).wl_values.currentData(), "elevation")
         # a fresh project guesses
         self.prj.removeMapLayers([self.pts.id()])
         settings_store.clear(self.prj)
         d.restore_from_project()
-        self.assertEqual((d.wl_field.currentField(), d.wl_values.currentData()), ("DepthToGW", "depth"))
+        self.assertEqual((explo_row(d).wl_field.currentField(), explo_row(d).wl_values.currentData()),
+                         ("DepthToGW", "depth"))
 
     def test_enabled_rules(self):
         d = self.dock
-        widgets = (d.screen_top_field, d.screen_bottom_field, d.screen_values, d.wl_values, d.wl_field, d.atd_field,
-                   d.wl_label, d.wl_table)
+        r = explo_row(d)
+        widgets = (r.screen_top_field, r.screen_bottom_field, r.screen_values, r.wl_values, r.wl_field, r.atd_field,
+                   d.wl_label, r.wl_table)
         self.assertTrue(all(w.isEnabled() for w in widgets))
-        table_widgets = (d.wl_table_name_field, d.wl_table_elev_field, d.wl_table_date_field, d.wl_table_kind_field,
-                         d.wl_atd_values)
+        table_widgets = (r.wl_table_name_field, r.wl_table_elev_field, r.wl_table_date_field, r.wl_table_kind_field,
+                         r.wl_atd_values)
         self.assertFalse(any(w.isEnabled() for w in table_widgets))      # no table
-        d.wl_field.setField("")
-        self.assertFalse(d.wl_date_field.isEnabled())                    # a date only with its level
-        d.wl_field.setField("GW_Elev")
-        self.assertTrue(d.wl_date_field.isEnabled())
+        r.wl_field.setField("")
+        self.assertFalse(r.wl_date_field.isEnabled())                    # a date only with its level
+        r.wl_field.setField("GW_Elev")
+        self.assertTrue(r.wl_date_field.isEnabled())
         tbl = make_wl_table()
         self.prj.addMapLayer(tbl)
-        d.wl_table.setLayer(tbl)
+        r.wl_table.setLayer(tbl)
         self.assertTrue(all(w.isEnabled() for w in table_widgets))
-        d.wl_table_kind_field.setField("")
-        self.assertFalse(d.wl_atd_values.isEnabled())
+        r.wl_table_kind_field.setField("")
+        self.assertFalse(r.wl_atd_values.isEnabled())
         d.screens.setChecked(False)
-        self.assertFalse(any(w.isEnabled() for w in widgets + table_widgets + (d.wl_date_field, d.atd_date_field)))
+        self.assertFalse(any(w.isEnabled() for w in widgets + table_widgets + (r.wl_date_field, r.atd_date_field)))
         self.assertFalse(d.settings().screens)
 
     def test_water_level_table(self):
         d = self.dock
         tbl = make_wl_table()
         self.prj.addMapLayer(tbl)
-        d.wl_table.setLayer(tbl)                                        # fields guessed from the table
-        self.assertEqual((d.wl_table_name_field.currentField(), d.wl_table_elev_field.currentField(),
-                          d.wl_table_date_field.currentField(), d.wl_table_kind_field.currentField()),
+        explo_row(d).wl_table.setLayer(tbl)                             # fields guessed from the table
+        self.assertEqual((explo_row(d).wl_table_name_field.currentField(), explo_row(d).wl_table_elev_field.currentField(),
+                          explo_row(d).wl_table_date_field.currentField(), explo_row(d).wl_table_kind_field.currentField()),
                          ("Boring", "WL_Elev", "Date", "Kind"))
-        atd = d.wl_atd_values
+        atd = explo_row(d).wl_atd_values
         values = [atd.itemData(i) for i in range(atd.count())]
         self.assertEqual(values, ["ATD", "atd (field)", "Drilling", "Measured"])
         self.assertEqual(sorted(atd.checkedItemsData()), ["ATD", "atd (field)"])   # the automatic choice ...
         s = d.settings()
-        self.assertEqual((s.wl_table_id, s.wl_atd_values), (tbl.id(), []))          # ... stored as []
+        self.assertEqual((layer_rows(s)[0]["wl_table_id"], layer_rows(s)[0]["wl_atd_values"]), (tbl.id(), []))  # ... []
         atd.setItemCheckState(values.index("Drilling"), Qt.CheckState.Checked)
-        self.assertEqual(sorted(d.settings().wl_atd_values), ["ATD", "Drilling", "atd (field)"])
+        self.assertEqual(sorted(layer_rows(d.settings())[0]["wl_atd_values"]), ["ATD", "Drilling", "atd (field)"])
         for i in range(atd.count()):
             atd.setItemCheckState(i, Qt.CheckState.Unchecked)
-        self.assertEqual(d.settings().wl_atd_values, [NO_ATD])                     # none: not "automatic"
+        self.assertEqual(layer_rows(d.settings())[0]["wl_atd_values"], [NO_ATD])   # none: not "automatic"
         d.apply_settings(d.settings())
-        self.assertEqual(atd.checkedItemsData(), [])
+        self.assertEqual(explo_row(d).wl_atd_values.checkedItemsData(), [])
         # a table that is gone keeps its settings, so the panel can say so
-        saved = dataclasses.replace(d.settings(), wl_atd_values=["Drilling"])
+        saved = d.settings()
+        saved = dataclasses.replace(saved, point_layers=[dict(layer_rows(saved)[0], wl_atd_values=["Drilling"])])
         d.apply_settings(saved)
         tid = tbl.id()
         self.prj.removeMapLayer(tid)
         APP.processEvents()
-        s = d.settings()
-        self.assertEqual((s.wl_table_id, s.wl_table_name_field, s.wl_table_kind_field, s.wl_atd_values),
+        s = layer_rows(d.settings())[0]
+        self.assertEqual((s["wl_table_id"], s["wl_table_name_field"], s["wl_table_kind_field"], s["wl_atd_values"]),
                          (tid, "Boring", "Kind", ["Drilling"]))
 
     def test_removed_layer_is_never_touched(self):
@@ -631,7 +641,7 @@ class ScreenTests(PanelCase):
         d = self.dock
         tbl = make_wl_table()
         self.prj.addMapLayer(tbl)
-        d.wl_table.setLayer(tbl)
+        explo_row(d).wl_table.setLayer(tbl)
         d._track_layer_signals()
         tid = tbl.id()
         self.assertIn(tid, {lid for lid, _, _ in d._layer_conns})
@@ -664,8 +674,8 @@ class PlainLayerTests(PanelCase):
 
     def test_nothing_guessed(self):
         d = self.dock
-        s = d.settings()
-        self.assertEqual((s.screen_top_field, s.wl_field, s.atd_field, s.wl_table_id, s.wl_atd_values),
+        s = layer_rows(d.settings())[0]
+        self.assertEqual((s["screen_top_field"], s["wl_field"], s["atd_field"], s["wl_table_id"], s["wl_atd_values"]),
                          ("", "", "", "", []))
         self.assertEqual(self.chips()["Screens & water"], ("–", False))
 
@@ -1016,7 +1026,7 @@ class MF6Tests(PanelCase):
         d.apply_settings(s)
         self.assertEqual([type(r) for r in d.surface_rows], [SurfaceRow, ModelSurfaceRow, ModelSurfaceRow,
                                                              ModelSurfaceRow])
-        self.assertEqual(d.settings(), s)
+        self.assertEqual(d.settings(), as_rows(s))
         self.assertEqual(d.settings().surfaces, [raster, m1, m2, m3])
         self.assertEqual(d.surface_rows[2].layer_spin.value(), 5)          # kept although the grid has 3 layers
         self.assertEqual(d.surface_rows[2].time_combo.currentData(), "9,9")
@@ -1026,7 +1036,7 @@ class MF6Tests(PanelCase):
         other = XSectionsDock(self.iface, None)
         try:
             other.restore_from_project()
-            self.assertEqual(other.settings(), s)
+            self.assertEqual(other.settings(), as_rows(s))
         finally:
             other.cleanup()
             other.deleteLater()
@@ -1242,11 +1252,12 @@ class MF6Tests(PanelCase):
 class MF6RealDataTests(PanelCase):
     """The user's models (read-only copies): F9_flowV1 (DISV, 3 layers, 30 stress periods) and CDF_Mounding (DISU)."""
 
+    @timing_test
     def test_f9(self):
         t0 = time.perf_counter()
         dlg = MF6Dialog(None, os.path.join(REALDATA, "mf6", "F9_flowV1"), QgsCoordinateReferenceSystem("EPSG:2927"))
         try:
-            self.assertLess(time.perf_counter() - t0, 10.0)
+            self.assertLess(time.perf_counter() - t0, budget(10.0))
             self.assertEqual(dlg.bottoms.count(), 3)
             items = combo_items(dlg.time_combo)
             self.assertEqual(len(items), 31)

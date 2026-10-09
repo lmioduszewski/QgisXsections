@@ -9,20 +9,31 @@
 - Disclosure: "More: ..." settings that are set once, folded inside a section.
 - SurfaceRow: one other surface (a raster line besides the ground) in the Surfaces list, with its editor. Its source
   fields (raster, band) are hooks that mf6_dialog.ModelSurfaceRow replaces for a MODFLOW 6 model surface.
+- ExploSwatch / SymbolSwatch (0.3.3): the header swatches of the point-layer rows (ui.point_rows): an exploration
+  line in its look's colour (0.3.4: up to three bars for a Color row of several colours), and an other-points symbol
+  drawn from render.scales' symbol geometry.
+- StyleChips (0.3.4): the colours a Color row reads from its layer's QGIS style, as wrapping chips; LINE_STYLE_ICONS:
+  the Sheet style grid's Solid / Dashed / Dotted icons (SegmentedControl.setItemIcon with a size).
+- Small helpers the panel and the point rows share (moved from ui.dock in 0.3.3, which imports them back): _combo,
+  _segmented, _narrow, _spin, _set_combo_data, _field_combo, _numeric_field_combo, _cbox, _note, _esc and set_field
+  (the panel's rule for filling one field box, ui.point_guess.pick_field). 0.3.5: a number box lists number AND text
+  fields (NUMBER_BOX_FILTERS: a CSV opened by OGR has only text fields), field_kind tells them apart for the guesses.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from qgis.core import Qgis, QgsProject, QgsRasterLayer
-from qgis.gui import QgsColorButton, QgsDoubleSpinBox, QgsMapLayerComboBox, QgsRasterBandComboBox
-from qgis.PyQt.QtCore import QByteArray, QEvent, QObject, QPointF, QRectF, QSize, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QPen, QPolygonF
+from qgis.core import Qgis, QgsFieldProxyModel, QgsProject, QgsRasterLayer
+from qgis.gui import (QgsColorButton, QgsDoubleSpinBox, QgsFieldComboBox, QgsMapLayerComboBox,
+                      QgsRasterBandComboBox)
+from qgis.PyQt.QtCore import QByteArray, QEvent, QMetaType, QObject, QPointF, QRectF, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF
 from qgis.PyQt.QtWidgets import (QAbstractButton, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                  QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
 from ..core.model import SURFACE_DEFAULTS, clean_surface
+from .point_guess import pick_field
 
 try:                                   # QtSvg ships with QGIS; the icons fall back to nothing without it
     from qgis.PyQt.QtSvg import QSvgRenderer
@@ -70,6 +81,8 @@ class Theme:
     hover: QColor
     chip_on: QColor            # checked tool button
     panel2: QColor             # inline editor background
+    new: QColor                # the NEW badge's text (0.3.4)
+    new_bg: QColor             # ... and its background
 
 
 _THEMES: Dict[Tuple[str, ...], Theme] = {}
@@ -95,7 +108,7 @@ def theme_for(pal: QPalette) -> Theme:
                   chip=_mix(win, txt, 0.15), chip_ink=_mix(txt, win, 0.12), chip_open=QColor(255, 255, 255, 46),
                   warn=QColor("#e6b65c"), warn_bg=QColor("#3b2f15"), error=QColor("#ff8a7a"),
                   link=_mix(hl, white, 0.45), hover=QColor(255, 255, 255, 22), chip_on=_mix(win, hl, 0.35),
-                  panel2=_mix(win, txt, 0.06))
+                  panel2=_mix(win, txt, 0.06), new=QColor("#6fcf9a"), new_bg=QColor("#1d3a2b"))
     else:
         t = Theme(dark=False, bar=QColor("#193340"), bar_hover=QColor("#21414f"), bar_disabled=QColor("#9aa8b0"),
                   on_bar=white, heading=QColor("#193340"), ink=txt, muted=QColor("#5a6b74"), disabled=dis,
@@ -103,7 +116,7 @@ def theme_for(pal: QPalette) -> Theme:
                   chip=QColor("#dce3e7"), chip_ink=QColor("#44555e"), chip_open=QColor(255, 255, 255, 46),
                   warn=QColor("#9a6510"), warn_bg=QColor("#f6eedd"), error=QColor("#c0392b"),
                   link=QColor("#446f85"), hover=QColor(122, 146, 158, 40), chip_on=QColor("#dde7ed"),
-                  panel2=QColor("#eef2f4"))
+                  panel2=QColor("#eef2f4"), new=QColor("#2e7d57"), new_bg=QColor("#e3efe8"))
     _THEMES[key] = t
     return t
 
@@ -151,6 +164,18 @@ QFrame#xsSurfaceRow {{ background: transparent; border: none; border-top: 1px so
 QFrame#xsGroundRow {{ background: transparent; border: none; }}
 QFrame#xsSurfaceEditor {{ background: {css(t.panel2)}; border: none; border-top: 1px solid {css(t.rule)}; }}
 QFrame#xsMoreBody {{ border: none; border-left: 2px solid {css(t.rule)}; }}
+QFrame#xsPointList {{ background: {css(t.field)}; border: 1px solid {css(t.field_line)}; border-radius: 3px; }}
+QFrame#xsPointRow {{ background: transparent; border: none; border-top: 1px solid {css(t.rule)}; }}
+QFrame#xsPointRow[first="true"] {{ border-top: none; }}
+QLabel#xsSubhead {{ color: {css(t.heading)}; border: none; border-top: 1px dashed {css(t.rule)}; padding-top: 5px; }}
+QLabel#xsSubhead:disabled {{ color: {css(t.disabled)}; }}
+QFrame#xsSubheadRow {{ background: transparent; border: none; border-top: 1px dashed {css(t.rule)}; padding-top: 5px; }}
+QFrame#xsRuleTop {{ background: transparent; border: none; border-top: 1px dashed {css(t.rule)}; padding-top: 5px; }}
+QLabel#xsSubheadLabel {{ color: {css(t.heading)}; border: none; }}
+QLabel#xsSubheadLabel:disabled {{ color: {css(t.disabled)}; }}
+QLabel#xsNewBadge {{ color: {css(t.new)}; background: {css(t.new_bg)}; border: none; border-radius: 3px;
+    padding: 0px 4px; font-weight: bold; }}
+QFrame#xsStyleBox {{ background: {css(t.field)}; border: 1px solid {css(t.field_line)}; border-radius: 3px; }}
 """
 
 
@@ -169,7 +194,17 @@ ICONS = {
              '2.6-2.6C14.5 4.5 11.6 1.5 8 1.5z"/><circle cx="5" cy="7" r=".9" fill="currentColor"/>'
              '<circle cx="7.6" cy="4.4" r=".9" fill="currentColor"/><circle cx="10.8" cy="5.4" r=".9" '
              'fill="currentColor"/>',
+    "other": '<circle cx="8" cy="8" r="4.2" fill="currentColor"/>',
 }
+# the Sheet style grid's line styles (0.3.4, the mockup's 22 x 8 icons), shown on icon-only segmented buttons
+_LS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 8" fill="none">{}</svg>'
+LINE_STYLE_ICONS = {
+    "solid": _LS_SVG.format('<path d="M1 4h20" stroke="currentColor" stroke-width="1.6"/>'),
+    "dash": _LS_SVG.format('<path d="M1 4h20" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 2.5"/>'),
+    "dot": _LS_SVG.format('<path d="M2 4h19" stroke="currentColor" stroke-width="1.8" stroke-dasharray="0.1 3.2" '
+                          'stroke-linecap="round"/>'),
+}
+LINE_STYLE_ICON_SIZE = (22, 8)           # px
 _RENDERERS: Dict[Tuple[str, str], Any] = {}
 
 
@@ -183,6 +218,24 @@ def _icon_renderer(name: str, color: str):
         r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         _RENDERERS[key] = r
     return r if r.isValid() else None
+
+
+def svg_pixmap(svg: str, color: str, px: int, scale: int = 2, height: Optional[int] = None) -> QPixmap:
+    """An SVG document (colours written "currentColor") drawn in `color` into a px x px pixmap (px x `height` when
+    given, the document stretched to that rect: the 22 x 8 line-style icons), at `scale` x the pixels for sharp icons
+    on high-dpi screens; transparent without QtSvg."""
+    h = px if height is None else int(height)
+    pm = QPixmap(px * scale, h * scale)
+    pm.fill(Qt.GlobalColor.transparent)
+    if QSvgRenderer is not None:
+        r = QSvgRenderer(QByteArray(svg.replace("currentColor", color).encode("utf-8")))
+        if r.isValid():
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            r.render(p, QRectF(0.0, 0.0, px * scale, h * scale))
+            p.end()
+    pm.setDevicePixelRatio(scale)
+    return pm
 
 
 def _scaled_font(base: QFont, factor: float, weight: Optional[QFont.Weight] = None, spacing: float = 0.0) -> QFont:
@@ -433,10 +486,12 @@ class SegmentedControl(QWidget):
     """Buttons side by side for a short choice, with the QComboBox API the panel uses: addItem(text, data),
     count, itemText, itemData, findData, findText, currentIndex, setCurrentIndex, currentData, currentText,
     and the signals currentIndexChanged(int) (also for programmatic changes) and activated(int) (clicks).
-    setItemShortText gives a button a shorter text, shown while the full texts do not all fit."""
+    setItemShortText gives a button a shorter text, shown while the full texts do not all fit; setItemIcon makes a
+    button show only an icon (the text stays its accessible name)."""
 
     currentIndexChanged = pyqtSignal(int)
     activated = pyqtSignal(int)
+    ICON_PX = 12                           # icon-only buttons (setItemIcon)
 
     def __init__(self, items: Sequence[Tuple[str, Any]] = (), parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -444,6 +499,8 @@ class SegmentedControl(QWidget):
         self._texts: List[str] = []
         self._short: List[str] = []
         self._data: List[Any] = []
+        self._icons: List[Any] = []        # None, a QIcon, or an SVG document drawn in the theme's colours
+        self._icon_sizes: List[QSize] = []  # each button's icon size (setItemIcon; ICON_PX square by default)
         self._buttons: List[QToolButton] = []
         self._current = -1
         self._lay = QHBoxLayout(self)
@@ -470,6 +527,8 @@ class SegmentedControl(QWidget):
         self._texts.append(text)
         self._short.append("")
         self._data.append(data)
+        self._icons.append(None)
+        self._icon_sizes.append(QSize(self.ICON_PX, self.ICON_PX))
         self._buttons.append(b)
         self._lay.addWidget(b, 1)
         self._update_positions()
@@ -486,7 +545,8 @@ class SegmentedControl(QWidget):
         for b in self._buttons:
             b.setParent(None)
             b.deleteLater()
-        self._texts, self._short, self._data, self._buttons = [], [], [], []
+        self._texts, self._short, self._data, self._icons, self._buttons = [], [], [], [], []
+        self._icon_sizes = []
         if self._current != -1:
             self._current = -1
             self.currentIndexChanged.emit(-1)
@@ -509,6 +569,53 @@ class SegmentedControl(QWidget):
         if 0 <= i < len(self._short):
             self._short[i] = text
             self._fit_texts()
+
+    def setItemIcon(self, i: int, icon: Any, size: Optional[QSize] = None) -> None:
+        """Button `i` shows only `icon` (its text stays the accessible name; give it a tooltip too). `icon` is a
+        QIcon, or an SVG document whose colours are "currentColor": drawn in the ink colour, and in the on-bar colour
+        while the button is checked (redrawn when the palette changes). `size`: the icon's size (default ICON_PX
+        square; the line-style icons are 22 x 8)."""
+        if not 0 <= i < len(self._buttons):
+            return
+        self._icons[i] = icon
+        self._icon_sizes[i] = QSize(size) if size is not None else QSize(self.ICON_PX, self.ICON_PX)
+        b = self._buttons[i]
+        b.setAccessibleName(self._texts[i])
+        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        b.setIconSize(self._icon_sizes[i])
+        self._apply_icon(i)
+
+    def itemIcon(self, i: int) -> Any:
+        return self._icons[i] if 0 <= i < len(self._icons) else None
+
+    def itemIconSize(self, i: int) -> QSize:
+        return QSize(self._icon_sizes[i]) if 0 <= i < len(self._icon_sizes) else QSize(self.ICON_PX, self.ICON_PX)
+
+    def _apply_icon(self, i: int) -> None:
+        icon = self._icons[i]
+        if icon is None:
+            return
+        size = self._icon_sizes[i]
+        if isinstance(icon, str):
+            t = theme_for(self.palette())
+            q = QIcon()
+            for color, mode, state in ((t.ink, QIcon.Mode.Normal, QIcon.State.Off),
+                                       (t.ink, QIcon.Mode.Active, QIcon.State.Off),
+                                       (t.on_bar, QIcon.Mode.Normal, QIcon.State.On),
+                                       (t.on_bar, QIcon.Mode.Active, QIcon.State.On),
+                                       (t.disabled, QIcon.Mode.Disabled, QIcon.State.Off),
+                                       (t.field, QIcon.Mode.Disabled, QIcon.State.On)):
+                q.addPixmap(svg_pixmap(icon, color.name(), size.width(), height=size.height()), mode, state)
+            icon = q
+        self._buttons[i].setIconSize(size)
+        self._buttons[i].setIcon(icon)
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            for i, icon in enumerate(self._icons):
+                if isinstance(icon, str):
+                    self._apply_icon(i)
 
     def _fit_texts(self) -> None:
         if not any(self._short) or not self._buttons:
@@ -624,19 +731,36 @@ def field_label(text: str) -> QLabel:
     return lab
 
 
-def field_box(label: str, widget: QWidget, links: Sequence[QWidget] = ()) -> QWidget:
-    """`widget` under its label; `links` (small link buttons) sit at the right of the label line."""
+def note_label(text: str) -> QLabel:
+    """A small muted note in a field's label line ("all layers", "plotted / in the layer")."""
+    lab = QLabel(text)
+    lab.setObjectName("xsMuted")
+    lab.setFont(_scaled_font(lab.font(), 0.84, QFont.Weight.DemiBold))
+    lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    return lab
+
+
+def field_box(label: str, widget: QWidget, links: Sequence[QWidget] = (), note: str = "") -> QWidget:
+    """`widget` under its label; `links` (small link buttons) sit at the right of the label line, `note` (muted)
+    right after the label."""
     w = QWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(2)
     lab = None
-    if links:
+    if links or note:
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(3)
         lab = field_label(label)
-        head.addWidget(lab, 1)
+        if note:
+            lab.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            head.addWidget(lab, 0)
+            n = note_label(note)
+            w.note = n
+            head.addWidget(n, 1)
+        else:
+            head.addWidget(lab, 1)
         for x in links:
             head.addWidget(x, 0)
         lay.addLayout(head)
@@ -830,6 +954,245 @@ class Swatch(QWidget):
         p.end()
 
 
+class _ChipSwatch(QWidget):
+    """A 22 x 16 white chip (as on paper, in any theme) with a thin border; subclasses paint on it."""
+
+    W, H = 22, 16
+
+    def __init__(self, color: str = "#111111", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self.setFixedSize(self.W, self.H)
+
+    def color(self) -> str:
+        return self._color.name()
+
+    def set_color(self, color: str) -> None:
+        c = QColor(color)
+        if c.isValid() and c.name() != self._color.name():
+            self._color = c
+            self.update()
+
+    def paintEvent(self, _e) -> None:
+        t = theme_for(self.palette())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(t.field_line, 1))
+        p.setBrush(QColor("#ffffff"))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 3.0, 3.0)
+        self._paint(p)
+        p.end()
+
+    def _paint(self, p: QPainter) -> None:
+        pass
+
+
+class ExploSwatch(_ChipSwatch):
+    """An exploration row's swatch: a vertical line with a short bar on top (the depth line and its top cap) in the
+    row's colour: #111111 (Black), LOOK_GRAY or, for Color, its one colour; a Color row of several colours (0.3.4):
+    two or three vertical bars, one per colour (the mockup's swatchFor)."""
+
+    MAX_COLORS = 3
+    BLACK = "#111111"                      # an empty list draws this (as a Color row with no symbol is drawn)
+
+    def __init__(self, color: str = "#111111", parent: Optional[QWidget] = None):
+        super().__init__(color, parent)
+        self._colors: List[QColor] = [QColor(self._color)]
+
+    def colors(self) -> List[str]:
+        return [c.name() for c in self._colors]
+
+    def set_colors(self, colors: Sequence[str]) -> None:
+        """One colour: the line and its cap; two or three: bars (more are left out); none: black."""
+        cs = [QColor(c) for c in list(colors or [])[:self.MAX_COLORS]]
+        cs = [c for c in cs if c.isValid()] or [QColor(self.BLACK)]
+        if [c.name() for c in cs] != self.colors():
+            self._colors = cs
+            self._color = QColor(cs[0])
+            self.update()
+
+    def set_color(self, color: str) -> None:
+        self.set_colors([color])
+
+    def _paint(self, p: QPainter) -> None:
+        sx, sy = self.width() / 22.0, self.height() / 16.0
+        if len(self._colors) > 1:
+            for i, c in enumerate(self._colors):
+                pen = QPen(c, 2.2)
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                p.setPen(pen)
+                x = (6.0 + 5.0 * i) * sx
+                p.drawLine(QPointF(x, 3.0 * sy), QPointF(x, 14.0 * sy))
+            return
+        pen = QPen(self._colors[0], 1.6)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(pen)
+        p.drawLine(QPointF(11.0 * sx, 3.0 * sy), QPointF(11.0 * sx, 14.0 * sy))
+        pen.setWidthF(1.2)
+        p.setPen(pen)
+        p.drawLine(QPointF(8.0 * sx, 3.0 * sy), QPointF(14.0 * sx, 3.0 * sy))
+
+
+class StyleChips(QWidget):
+    """The colours a Color row reads from its layer's style (0.3.4, the mockup's style box): wrapping chips, each an
+    11 px circle of the colour with a thin dark border and its label, then a muted "+ N more". A label is cut with "…"
+    only when it is wider than the whole row; the tooltip lists every label. Painted (no child widgets), with a height
+    for its width."""
+
+    DOT = 11                               # px, the circle
+    DOT_GAP = 4                            # px, circle to label
+    CHIP_GAP = 10                          # px between chips
+    LINE_GAP = 3                           # px between lines
+    BORDER = "#232323"
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._items: List[Tuple[str, str]] = []
+        self._more = 0
+        sp = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+
+    # ---- data
+    def set_items(self, items: Sequence[Tuple[str, str]], more: int = 0) -> None:
+        """`items`: (label, "#rrggbb") in the order shown; `more`: how many are not shown ("+ N more")."""
+        items = [(str(lab), QColor(c).name()) for lab, c in items]
+        more = max(0, int(more))
+        if items == self._items and more == self._more:
+            return
+        self._items, self._more = items, more
+        self.setToolTip("\n".join(lab for lab, _c in items))
+        self.updateGeometry()
+        self.update()
+
+    def items(self) -> List[Tuple[str, str]]:
+        return list(self._items)
+
+    def more(self) -> int:
+        return self._more
+
+    def more_text(self) -> str:
+        return f"+ {self._more} more" if self._more else ""
+
+    # ---- geometry
+    def _font(self) -> QFont:
+        return _scaled_font(self.font(), 0.9)
+
+    def _line_h(self, fm: QFontMetrics) -> int:
+        return max(self.DOT, fm.height())
+
+    def _layout(self, width: int):
+        """[(x, line, label as drawn, colour or "" for the more text)] for `width`, and the number of lines."""
+        fm = QFontMetrics(self._font())
+        width = max(1, int(width))
+        out, x, line = [], 0, 0
+        pieces = [(lab, c) for lab, c in self._items] + ([(self.more_text(), "")] if self._more else [])
+        for lab, c in pieces:
+            mark = self.DOT + self.DOT_GAP if c else 0
+            w = mark + fm.horizontalAdvance(lab)
+            if x > 0 and x + w > width:
+                x, line = 0, line + 1
+            text = lab
+            if w > width:                              # wider than the whole row: cut
+                text = fm.elidedText(lab, Qt.TextElideMode.ElideRight, max(0, width - mark))
+                w = mark + fm.horizontalAdvance(text)
+            out.append((x, line, text, c))
+            x += w + self.CHIP_GAP
+        return out, (line + 1 if out else 0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        _out, lines = self._layout(width)
+        if not lines:
+            return 0
+        lh = self._line_h(QFontMetrics(self._font()))
+        return lines * lh + (lines - 1) * self.LINE_GAP
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetrics(self._font())
+        out, _lines = self._layout(10 ** 6)
+        w = max((x + (self.DOT + self.DOT_GAP if c else 0) + fm.horizontalAdvance(t) for x, _l, t, c in out),
+                default=0)
+        return QSize(w, self.heightForWidth(self.width() if self.width() > 1 else w))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.DOT + self.DOT_GAP + 12, self._line_h(QFontMetrics(self._font())) if self._items else 0)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.updateGeometry()
+
+    def paintEvent(self, _e) -> None:
+        t = theme_for(self.palette())
+        f = self._font()
+        fm = QFontMetrics(f)
+        lh = self._line_h(fm)
+        out, _lines = self._layout(self.width())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setFont(f)
+        ink = self.palette().color(QPalette.ColorRole.Text) if self.isEnabled() else t.disabled
+        for x, line, text, c in out:
+            top = line * (lh + self.LINE_GAP)
+            if c:
+                p.setPen(QPen(QColor(self.BORDER), 1.0))
+                p.setBrush(QColor(c))
+                d = self.DOT - 1.0
+                p.drawEllipse(QRectF(x + 0.5, top + (lh - self.DOT) / 2.0 + 0.5, d, d))
+                tx = x + self.DOT + self.DOT_GAP
+                p.setPen(ink)
+            else:
+                tx = x
+                p.setPen(t.muted)
+            p.drawText(QRectF(tx, top, max(1, self.width() - tx), lh),
+                       int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), text)
+        p.end()
+
+    def painted(self) -> List[Tuple[str, str]]:
+        """(label as drawn, colour; "" for the more text) at the current width (tests)."""
+        return [(text, c) for _x, _l, text, c in self._layout(self.width())[0]]
+
+
+class SymbolSwatch(_ChipSwatch):
+    """An other-points row's swatch: its symbol (render.scales' symbol geometry: the filled shape's outline, or the
+    asterisk's strokes) in its colour, scaled to fit the chip."""
+
+    def __init__(self, shape: str = "asterisk", color: str = "#1f6fb2", parent: Optional[QWidget] = None):
+        super().__init__(color, parent)
+        self._shape = shape
+
+    def shape(self) -> str:
+        return self._shape
+
+    def set_symbol(self, shape: str, color: str) -> None:
+        if shape != self._shape:
+            self._shape = shape
+            self.update()
+        self.set_color(color)
+
+    def _paint(self, p: QPainter) -> None:
+        from ..render.scales import symbol_capsules, symbol_extent, symbol_outline   # pure geometry (no matplotlib)
+        caps = symbol_capsules(self._shape, 7.0)
+        half_w, below, above = symbol_extent(caps)
+        if half_w <= 0 or max(below, above) <= 0:
+            return
+        k = min((self.width() - 4.0) / (2.0 * half_w), (self.height() - 3.0) / (2.0 * max(below, above)))
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        outline = symbol_outline(self._shape, 7.0)
+        if outline:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(self._color)
+            p.drawPolygon(QPolygonF([QPointF(cx + x * k, cy - y * k) for x, y in outline]))
+            return
+        for c in caps:                     # the asterisk: round-ended strokes
+            pen = QPen(self._color, 2.0 * c.r * k)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.drawLine(QPointF(cx + c.ax * k, cy - c.ay * k), QPointF(cx + c.bx * k, cy - c.by * k))
+
+
 # ---------------------------------------------------------------- "More: ..." disclosure
 class _DisclosureButton(QAbstractButton):
     def __init__(self, text: str, parent: Optional[QWidget] = None):
@@ -905,6 +1268,12 @@ class Disclosure(QWidget):
 
     def text(self) -> str:
         return self.button.text()
+
+    def setText(self, text: str) -> None:
+        if text != self.button.text():
+            self.button.setText(text)
+            self.button.updateGeometry()
+            self.button.update()
 
     def isExpanded(self) -> bool:
         return self.button.isChecked()
@@ -1196,3 +1565,121 @@ class SurfaceRow(QFrame):
             return
         self.refresh_labels()
         self.changed.emit()
+
+
+# ---------------------------------------------------------------- small helpers (moved from ui.dock in 0.3.3)
+def _combo(items: Sequence[Tuple[str, Any]], parent=None) -> QComboBox:
+    c = QComboBox(parent)
+    for text, data in items:
+        c.addItem(text, data)
+    _narrow(c)
+    return c
+
+
+def _segmented(items: Sequence[Tuple[str, Any]], tips: Sequence[str] = ()) -> SegmentedControl:
+    seg = SegmentedControl(items)
+    for i, tip in enumerate(tips):
+        seg.setItemToolTip(i, tip)
+    return seg
+
+
+def _narrow(combo: QComboBox, chars: int = 6) -> None:
+    """Let combos shrink with the dock instead of forcing a horizontal scrollbar."""
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(chars)
+    combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+
+def _set_combo_data(combo, value: Any) -> bool:
+    for i in range(combo.count()):
+        if combo.itemData(i) == value:
+            combo.setCurrentIndex(i)
+            return True
+    return False
+
+
+def _spin(minimum: float, maximum: float, decimals: int, step: float, suffix: str = "") -> QgsDoubleSpinBox:
+    s = QgsDoubleSpinBox()
+    s.setRange(minimum, maximum)
+    s.setDecimals(decimals)
+    s.setSingleStep(step)
+    s.setSuffix(suffix)
+    s.setShowClearButton(False)
+    s.setKeyboardTracking(False)
+    s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    s.setMinimumWidth(48)
+    return s
+
+
+# what a number box lists (0.3.5): number fields and text fields, whose plain numbers are read (core.explorations
+# to_number: "642.3", " 642 ", "1,234.5"; anything else is left out and flagged). The box's own field-type icons tell
+# them apart. (0.3.4 and before: number fields only, so a CSV's box listed nothing and would not open.)
+NUMBER_BOX_FILTERS = QgsFieldProxyModel.Filter.Numeric | QgsFieldProxyModel.Filter.String
+
+
+def field_kind(field) -> Optional[bool]:
+    """A QgsField as ui.point_guess.Fields sees it: True a number field, False a text field, None any other kind (a
+    date, a boolean ...), as NUMBER_BOX_FILTERS lists them."""
+    if field.isNumeric():
+        return True
+    return False if field.type() == QMetaType.Type.QString else None
+
+
+def _field_combo(tooltip: str, numeric: bool = False, allow_empty: bool = True) -> QgsFieldComboBox:
+    """A field of a layer (a number box when `numeric`: number and text fields, NUMBER_BOX_FILTERS), or none when
+    `allow_empty`."""
+    c = QgsFieldComboBox()
+    c.setAllowEmptyFieldName(allow_empty)
+    if numeric:
+        c.setFilters(NUMBER_BOX_FILTERS)
+    c.setToolTip(tooltip)
+    _narrow(c)
+    return c
+
+
+def _numeric_field_combo(tooltip: str) -> QgsFieldComboBox:
+    """A number box of the explorations layer (a number or text field), or none."""
+    return _field_combo(tooltip, numeric=True)
+
+
+def _note(text: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setObjectName("xsNote")
+    lab.setWordWrap(True)
+    lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    f = QFont(lab.font())
+    if f.pointSizeF() > 0:
+        f.setPointSizeF(f.pointSizeF() * 0.9)
+    lab.setFont(f)
+    return lab
+
+
+def _esc(text: str) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _cbox(text: str, tip: str = "", strong: bool = False) -> QCheckBox:
+    b = QCheckBox(text)
+    b.setToolTip(tip)
+    if strong:
+        f = QFont(b.font())
+        f.setWeight(QFont.Weight.DemiBold)
+        b.setFont(f)
+    return b
+
+
+def set_field(combo: QgsFieldComboBox, name: str, guesses: Sequence[str], allow_empty: bool = False,
+              numeric: bool = False, keep_empty: bool = False, pk: Iterable[str] = (), text_ok=None) -> bool:
+    """Keep `name` if the combo's layer has it, else guess from `guesses` (a number box when `numeric`: number and
+    text fields, number fields first, a text field only when `text_ok` says its values are numbers; never the
+    primary-key fields `pk`). With `keep_empty` (and `allow_empty`), an empty `name` means none and is kept. Without
+    `allow_empty`, a box with no guess takes the first field that is not the primary key (a number field for a number
+    box). A number box that gets no field shows none (0.3.5: not the first field QgsFieldComboBox picks by itself,
+    often the name column of a CSV; the build then asks him to choose). True when a field was guessed from `guesses`
+    (the 0.3.2 rule of the panel's field boxes, ui.point_guess.pick_field)."""
+    fields = combo.fields() if combo.layer() is not None else []
+    value, guessed = pick_field([(f.name(), field_kind(f)) for f in fields], pk, name, guesses, numeric=numeric,
+                                required=not allow_empty, keep_empty=keep_empty and allow_empty, text_ok=text_ok)
+    if value or allow_empty or numeric:
+        combo.setField(value)
+    return guessed

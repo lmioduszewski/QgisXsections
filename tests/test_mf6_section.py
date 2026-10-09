@@ -17,7 +17,8 @@ from unittest import mock
 
 import numpy as np
 
-from tests.fixtures import CRS, LINE, REALDATA, ROOT, X0, Y0, default_settings, line_length, load_project, start_app
+from tests.fixtures import (CRS, LINE, REALDATA, ROOT, X0, Y0, budget, default_settings, line_length, load_project,
+                            start_app, timing_test)
 from tests.test_units import FTUS
 
 start_app()
@@ -171,6 +172,22 @@ class Intervals(unittest.TestCase):
         self.assertAlmostEqual(path.s1[-1], exit_ft, delta=1e-6)
         self.assertAlmostEqual(path.covered(), exit_ft, delta=1e-6)       # no gap inside the grid
         self.assertGreaterEqual(len(path), 8)
+
+    def test_a_bent_line_ends_at_the_model_length(self):
+        # stations summed per segment as section.vertex_stations sums them: the last piece of a line ending inside
+        # the grid ends exactly at the model length (a rounding error short, the wide CSV's last row was blank)
+        from xsections.core.section import vertex_stations
+        ring = [(X0 - 5000.0, Y0 - 5000.0), (X0 - 5000.0, Y0 + 5000.0), (X0 + 5000.0, Y0 + 5000.0),
+                (X0 + 5000.0, Y0 - 5000.0)]
+        sg = MS.section_grid(synthetic_grid([ring], [10.0], [0.0]), EPSG, EPSG)
+        rng = np.random.default_rng(7)
+        for k in range(60):
+            n = 3 + k % 3
+            line = polyline([(X0 + x, Y0 + y) for x, y in rng.uniform(-4000.0, 4000.0, (n, 2))])
+            path = MS.cell_path(sg, line, FTUS)
+            vs = vertex_stations(line, FTUS)
+            self.assertEqual(path.length, vs[-1], k)
+            self.assertEqual(path.s1[-1], vs[-1], k)
 
     def test_cell_crossed_twice(self):
         # leaves cell (row 0, col 0) eastwards, turns, comes back into it
@@ -817,6 +834,7 @@ class RealModels(unittest.TestCase):
     def tearDown(self):
         self.assertEqual(folder_state(REALDATA), self.state, "nothing written next to the real data")
 
+    @timing_test
     def test_f9_section(self):
         f9 = os.path.join(self.mf6_dir, "F9_flowV1")
         grb, hds = os.path.join(f9, "F9_flowV1.disv.grb"), os.path.join(f9, "F9_flowV1.hds")
@@ -848,7 +866,7 @@ class RealModels(unittest.TestCase):
         t_warm = time.perf_counter() - t
         print(f"\nF9 section with 4 model surfaces: first {t_first:.3f} s, warm {t_warm:.3f} s "
               f"(ground only {t_ground:.3f} s)")
-        self.assertLess(t_warm - t_ground, 0.5)
+        self.assertLess(t_warm - t_ground, budget(0.5))
         self.assertEqual([sp.name for sp in m.surfaces],
                          ["Model top", "Layer 3 bottom", "Layer 1 head (SP 30)", "Water table (SP 30)"])
         self.assertEqual(m.surfaces[2].detail, "Layer 1 head from F9_flowV1.hds (SP 30, step 13)")

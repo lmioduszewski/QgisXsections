@@ -159,7 +159,7 @@ class SurfaceSettings(unittest.TestCase):
                      screen_top_field="ScrTop", wl_atd_values=["ATD"], wl_label="elev_date")
         back = Settings.from_json(s.to_json())
         self.assertEqual(back, s)
-        self.assertEqual(SETTINGS_VERSION, 5)
+        self.assertEqual(SETTINGS_VERSION, 7)
         old = json.loads(Settings().to_json())
         old["version"] = 4
         for k in ("surfaces", "screens", "screen_top_field", "wl_label"):

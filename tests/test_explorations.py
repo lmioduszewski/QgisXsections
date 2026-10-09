@@ -67,13 +67,15 @@ class Explorations(unittest.TestCase):
             self.assertEqual(h.side, "L" if off > 0 else "R", name)
             nx, ny = _left_normal(st)
             sign = 1 if off > 0 else -1
-            self.assertEqual(h.direction, _compass8(sign * nx, sign * ny), name)
+            # 0.3.5: the direction of projection, from the exploration onto the line (the reverse of its side)
+            self.assertEqual(h.direction, _compass8(-sign * nx, -sign * ny), name)
             self.assertEqual(h.type_value, typ)
             x, y = point_at(st, off)
             self.assertAlmostEqual(h.x, x, delta=1e-6)
             self.assertAlmostEqual(h.y, y, delta=1e-6)
-        self.assertEqual(self.by["B-1"].direction, "N")
-        self.assertEqual(self.by["MW-1"].direction, "S")
+        # 0.3.5: B-1 lies north of the eastward line and is projected south onto it; MW-1 (south) north
+        self.assertEqual(self.by["B-1"].direction, "S")
+        self.assertEqual(self.by["MW-1"].direction, "N")
 
     def test_ground(self):
         for h in self.hits:
@@ -434,6 +436,110 @@ class BottomElevationField(unittest.TestCase):
     def test_depth_field_alone_matches_the_truth_table(self):
         hits, *_ = Explorations.run_find(bot_elev=True)             # BotElev present but not chosen
         self.assertTrue(all(h.bottom_source in ("depth", "none") for h in hits))
+
+
+class ProjectionDirection(unittest.TestCase):
+    """(0.3.5) `direction` is the direction of projection, from the exploration (or other point) onto the line (the
+    user: "if an exploration is north of the cross section line it is projected SOUTH onto the section line").
+    Station, offset and side (where it lies, looking from A to A′) are unchanged; on the line it stays ""."""
+
+    # (number, the line's two ends) inside the fixture DEM, map ft from its lower-left corner (one feature each)
+    LINES = [(1, (1000.0, 1000.0), (3000.0, 1000.0)),     # east-west, drawn eastward
+             (2, (4000.0, 500.0), (4000.0, 3500.0)),      # north-south, drawn northward
+             (3, (1000.0, 3800.0), (2500.0, 2300.0))]     # north-west to south-east
+    R = 50.0 / math.sqrt(2.0)
+    # (name, x, y, the line's number, side, direction): each well is far outside the other lines' reach
+    WELLS = [("N-1", 2000.0, 1040.0, 1, "L", "S"),        # 40 ft north of the east-west line: projected south
+             ("S-1", 2500.0, 940.0, 1, "R", "N"),
+             ("ON-1", 1500.0, 1000.0, 1, None, ""),        # on the line: no direction (offset 0), either side
+             ("E-2", 4030.0, 2000.0, 2, "R", "W"),         # east of the north-south line: projected west
+             ("W-2", 3950.0, 3000.0, 2, "L", "E"),
+             ("NE-3", 1750.0 + R, 3050.0 + R, 3, "L", "SW"),   # 50 ft north-east of the NW-SE line: south-west
+             ("SW-3", 2000.0 - R / 2, 2800.0 - R / 2, 3, "R", "NE")]
+
+    @classmethod
+    def setUpClass(cls):
+        from qgis.core import QgsFeature, QgsField, QgsGeometry, QgsPointXY, QgsVectorLayer
+        from qgis.PyQt.QtCore import QMetaType
+        from tests.fixtures import X0, Y0
+        cls.prj, cls.dem, _, _ = load_project()
+        cls.lines = QgsVectorLayer(f"LineString?crs={CRS}", "three lines", "memory")
+        cls.lines.dataProvider().addAttributes([QgsField("name", QMetaType.Type.QString)])
+        cls.lines.updateFields()
+        feats = []
+        for fid, (x1, y1), (x2, y2) in cls.LINES:
+            f = QgsFeature(cls.lines.fields())
+            f.setAttributes([str(fid)])
+            f.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(X0 + x1, Y0 + y1), QgsPointXY(X0 + x2, Y0 + y2)]))
+            feats.append(f)
+        cls.lines.dataProvider().addFeatures(feats)
+        cls.wells = QgsVectorLayer(f"Point?crs={CRS}", "wells", "memory")
+        cls.wells.dataProvider().addAttributes([QgsField("Name", QMetaType.Type.QString)])
+        cls.wells.updateFields()
+        feats = []
+        for name, x, y, *_ in cls.WELLS:
+            f = QgsFeature(cls.wells.fields())
+            f.setAttributes([name])
+            f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(X0 + x, Y0 + y)))
+            feats.append(f)
+        cls.wells.dataProvider().addFeatures(feats)
+        cls.prj.addMapLayers([cls.lines, cls.wells])
+
+    @classmethod
+    def tearDownClass(cls):
+        QgsProject.instance().clear()
+
+    def test_north_east_and_northeast_of_the_line(self):
+        import csv
+        import os
+        import tempfile
+        from tests.fixtures import point_row, seep_row
+        from xsections.core.build import build_section
+        from xsections.render.notes import compact_notes, note_texts
+        from xsections.render.scales import display_label, plan
+        from xsections.ui.dock import write_hits_csv
+        fids = [f.id() for f in self.lines.getFeatures()]
+        self.assertEqual(len(fids), 3)
+        for (lid, *_), fid in zip(self.LINES, fids):
+            want = {w[0]: w for w in self.WELLS if w[3] == lid}
+            s = Settings(line_layer_id=self.lines.id(), line_fid=fid, dem_layer_id=self.dem.id(), tolerance_ft=100.0,
+                         label_offset=True, point_layers=[point_row(self.wells, label_field="Name")],
+                         other_points=[seep_row(self.wells, label_field="Name")])
+            m = build_section(s, self.prj)
+            self.assertEqual(sorted(h.label for h in m.hits), sorted(want), lid)
+            for h in m.hits:
+                name, x, y, _, side, direction = want[h.label]
+                self.assertEqual((h.side if side else None, h.direction), (side, direction), name)
+                if direction:
+                    self.assertGreater(h.offset, 20.0, name)
+                else:
+                    self.assertLess(h.offset, 1e-6, name)
+            others = {p.label: p for p in m.other_points}           # the same wells as other points (seeps)
+            self.assertEqual(sorted(others), sorted(want), lid)
+            for name, (*_, side, direction) in want.items():
+                p = others[name]
+                self.assertEqual((p.side if side else None, p.direction), (side, direction), name)
+            by = {h.label: h for h in m.hits}
+            if lid == 1:
+                self.assertEqual(display_label(by["N-1"], s), "N-1 · 40 ft S")
+                self.assertEqual(display_label(by["S-1"], s), "S-1 · 60 ft N")
+                self.assertEqual(display_label(by["ON-1"], s), "ON-1 · 0 ft")
+                out = os.path.join(tempfile.mkdtemp(prefix="xsec_dir_"), "pts.csv")
+                write_hits_csv(out, m, s)                                # the column keeps its name "direction"
+                with open(out, newline="", encoding="utf-8-sig") as fh:
+                    rows = {r["name"]: r for r in csv.DictReader(fh)}
+                self.assertEqual({k: (r["side"], r["direction"]) for k, r in rows.items() if k != "ON-1"},
+                                 {"N-1": ("L", "S"), "S-1": ("R", "N")})
+                self.assertEqual(rows["ON-1"]["direction"], "")
+                p = plan(m, s)                                           # the notes say what the labels give
+                self.assertIn("Labels give the distance and direction each exploration was projected onto the "
+                              "section line.", " ".join(note_texts(m, s, p, p.pages[0])))
+                self.assertIn("Labels: distance and direction projected onto the line",
+                              [part.text for part in compact_notes(m, s, p, p.pages[0])[1]])
+            if lid == 2:
+                self.assertEqual(display_label(by["E-2"], s), "E-2 · 30 ft W")
+            if lid == 3:
+                self.assertEqual(display_label(by["NE-3"], s), "NE-3 · 50 ft SW")
 
 
 if __name__ == "__main__":

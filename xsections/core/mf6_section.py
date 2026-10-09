@@ -334,8 +334,11 @@ def cell_path(sg: SectionGrid, line: QgsGeometry, dist_factor: float) -> CellPat
     v = line_vertices(line)
     d = np.diff(v, axis=0)
     seg_len = np.hypot(d[:, 0], d[:, 1])
-    cum = np.concatenate([[0.0], np.cumsum(seg_len)])
-    length = float(cum[-1]) * dist_factor
+    # stations in feet summed as section.vertex_stations sums them, so the line's last piece ends exactly at the
+    # model length (and pieces meet the bends exactly)
+    seg_ft = seg_len * dist_factor
+    cum_ft = np.concatenate([[0.0], np.cumsum(seg_ft)])
+    length = float(cum_ft[-1])
     b = sg.bounds
     lo, hi = v.min(axis=0), v.max(axis=0)
     eps = 1e-9 * max(float(np.max(hi - lo)), 1.0)
@@ -375,8 +378,8 @@ def cell_path(sg: SectionGrid, line: QgsGeometry, dist_factor: float) -> CellPat
                     ((side[0] < -e) & (side[1] < -e) & (side[2] < -e) & (side[3] < -e))
             cand = csub[m][~apart]
             t0, t1, c = _segment_cells(sg, float(ax), float(ay), float(bx), float(by), cand)
-            parts0.append((cum[i] + t0 * seg_len[i]) * dist_factor)
-            parts1.append((cum[i] + t1 * seg_len[i]) * dist_factor)
+            parts0.append(cum_ft[i] + t0 * seg_ft[i])
+            parts1.append(cum_ft[i] + t1 * seg_ft[i])
             cells.append(c)
     if parts0:
         s0, s1, cell = np.concatenate(parts0), np.concatenate(parts1), np.concatenate(cells).astype(np.int64)

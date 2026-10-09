@@ -8,6 +8,7 @@ fig.dpi_scale_trans), so they look the same at every scale.
 """
 from __future__ import annotations
 
+import bisect
 import math
 from functools import lru_cache
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
@@ -18,20 +19,28 @@ from matplotlib import patheffects
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
-from matplotlib.patches import Polygon, Rectangle
+from matplotlib.patches import Ellipse, Polygon, Rectangle
 from matplotlib.textpath import TextToPath
 from matplotlib.ticker import FuncFormatter, MultipleLocator, NullLocator
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
 
-from ..core.model import Hit, PageLayout, Plan, SectionModel, Settings
+from ..core.model import (DEPTH_LW_BLACK, DEPTH_LW_COLOR, GRID_PRESETS, LOOK_GRAY, Hit, PageLayout, Plan,
+                          SectionModel, Settings, depth_widths, grid_spec, layer_view)
 # LABEL_* are used by the tests through this module
 from .scales import LABEL_GAP_IN, LABEL_PAD_IN, LABEL_ROW_IN, LABEL_SEP, LEADER_RISE_IN  # noqa: F401
+# the ground line's width lives in scales.py (the other points rest on it); figure.GROUND_LW stays its name here
+from .scales import (CLIP_ARROW_H_IN, CLIP_ARROW_HALF_IN, CLIP_ARROW_TIP_IN, CLIP_TD_BASE_IN, CLIP_TD_DX_IN,
+                     GROUND_LW, LEGEND_SYMBOL_MAX_PT, PlacedPoint, asterisk_width_pt, frame_levels, frame_screen,
+                     ground_top_fn, hit_in_range, mark_obstacles, td_page_layout,
+                     other_centre_in, other_label_anchor, other_label_layout, other_symbol, runs_below,
+                     symbol_capsules, symbol_edge_pt, symbol_extent, symbol_half_pt, symbol_outline)
 from .scales import (BRACKET_DX_IN, BRACKET_GAP_IN, WL_DX_IN, LEADER_DX_IN, LEADER_LW, LEADER_STEP_IN, MARK_EVERY_IN,
                      MARK_FIRST_IN, MARK_H_IN, MARK_HALF_IN, SCREEN_LW, WL_LABEL_GAP_IN, WL_LABEL_PT, WL_LINE_HALF_IN,
                      WL_LW, WL_TRI_H_IN, WL_TRI_HALF_IN, LegendEntry, legend_entries)
 from .scales import (AXIS_PAD_PT, AXIS_TICK_PT, AXIS_TITLE_PT, COL_GAP_IN, CROSSBAR_IN, END_DIR_PT, END_PT,
                      GROUND_CLEAR_IN, HBAR_DEPTH_IN, HBAR_H_IN, HBAR_LABEL_DY_IN, HBAR_LEN_IN, HBAR_NAME_DY_IN,
-                     LABEL_PT, NOTES_MIN_W, NOTE_COMPACT_PT, NOTE_MIN_PT, NOTE_NAME_MIN_CHARS, NOTE_PT, NOTE_SPACING,
+                     LABEL_PT, NOTES_MIN_W, NOTES_TOP_IN, NOTE_COMPACT_PT, NOTE_GAP_IN, NOTE_MIN_PT,
+                     NOTE_NAME_MIN_CHARS, NOTE_PITCH_IN, NOTE_PT, NOTE_SPACING,
                      RASTER_SLACK, RENDER_SLACK_PT, SCALE_LABEL_PT, SCALE_NAME_PT, STD_END_GAP_IN, STD_END_PT,
                      STD_HEAD_DY_IN, STD_HEAD_PT, STD_LINE_DY_IN, STD_LINE_MIN_PT, STD_LINE_PT, STD_TITLE_RAISE_IN,
                      SUBTITLE_PT_COMPACT, SWATCH_GAP_IN, SWATCH_IN, TD_EDGE_IN,
@@ -39,9 +48,14 @@ from .scales import (AXIS_PAD_PT, AXIS_TICK_PT, AXIS_TITLE_PT, COL_GAP_IN, CROSS
                      TITLE_PT_COMPACT, VBAR_LABEL_DX_IN, VBAR_W_IN, XTITLE_PAD_PT, YTITLE_GAP_PT, LabelSpot, bar_boxes,
                      bottom_band, clamp_centre, compact_rows_in, compass16, display_label, draws_depth_line,
                      draws_td_label, draws_top_cap, edge_in, elevation_label_width_in, engineer_face, fmt_in, fmt_num,
-                     fmt_station, ground_test, hbar_extent_in, label_layout, legend_rows, legend_types, mark_boxes,
+                     fmt_station, ground_test, hbar_extent_in, label_layout, legend_rows, mark_boxes,
                      notes_min_w, overlaps_any, pretty_label, ratio, stack_labels, td_text, tick_base, vbar_dx_in)
 from .scales import spread_1d as _spread_1d
+# the notes as text (render/notes.py, pure text: the plan sizes the standard layout's bottom from them); these names
+# stay figure's API
+from .notes import (NotePart, _draws_any_td, _hit_views, _merge_sources, _nb, _other_how,  # noqa: F401
+                    _other_notes, compact_notes, depth_sources_short, depth_sources_text, grid_text, layer_views,
+                    note_texts, screens_sources, surfaces_sources)
 
 FONT = "DejaVu Sans"
 # Everything that could move or resize the drawing is pinned here; used for drawing AND saving.
@@ -49,14 +63,22 @@ RC = {"font.family": "sans-serif", "font.sans-serif": [FONT], "font.size": 7.0,
       "savefig.bbox": "standard", "savefig.pad_inches": 0.0, "savefig.facecolor": "white",
       "figure.autolayout": False, "figure.constrained_layout.use": False,
       "pdf.fonttype": 42, "svg.fonttype": "none", "svg.hashsalt": "xsections",
-      "path.simplify": False, "axes.unicode_minus": False, "text.usetex": False}
+      "path.simplify": False, "axes.unicode_minus": False, "text.usetex": False,
+      # matplotlib's default, pinned: a dash pattern is multiplied by the line width (the grid's absolute dashes
+      # divide by it; the bends, match lines, surface dashes and ground-gap dots are scaled patterns)
+      "lines.scale_dashes": True}
 
 # --- style (defaults suit colored pencil: light grid, black data, no fills)
-GRID_COLORS = {"green": ("#a8c8b2", "#5f9a72"), "gray": ("#b4b4b4", "#6e6e6e")}   # (minor, major)
-MINOR_LW, MAJOR_LW, FRAME_LW, GROUND_LW = 0.35, 0.7, 0.9, 1.1
+# the grid presets (core.model.GRID_PRESETS; Custom: grid_spec): (minor, major) colours and the Green widths
+GRID_COLORS = {k: (v[1][0], v[0][0]) for k, v in GRID_PRESETS.items()}
+MAJOR_LW, MINOR_LW = GRID_PRESETS["green"][0][1], GRID_PRESETS["green"][1][1]
+FRAME_LW = 0.9                    # the frame: 0.9 pt black whatever the grid (GROUND_LW = 1.1: scales.py)
+GRID_DASH_PT = {"dash": (4.0, 2.0), "dot": (0.6, 1.6)}   # absolute, pt on paper (decision 23)
 INK = "#000000"
 DATA = "#2b2b2b"
-DEPTH_LW, DEPTH_TYPE_LW = 0.75, 1.6
+# depth lines (Sheet style, depth_widths): Black and Gray rows at DEPTH_LW, Color rows at DEPTH_COLOR_LW (the defaults)
+DEPTH_LW, DEPTH_COLOR_LW = DEPTH_LW_BLACK, DEPTH_LW_COLOR
+LEGEND_LINE_GID = "xsections-legend-line"   # a layer / style legend swatch line (tests find them by it)
 TICK_LW = 0.9                     # tick and label geometry (TICK_TO_IN, LABEL_PT ...) live in scales.py
 CAP_GID, TD_GID, TD_HALO_GID = "xsections-top-cap", "xsections-td-label", "xsections-td-halo"   # tags for tests
 LEADER = "#595959"
@@ -71,11 +93,8 @@ BEND = "#7b3294"
 WARN = "#c2372d"                 # on-screen preview warnings only (nothing red is printed)
 GROUND_FILL = "#efe8da"
 GAP_NOTE = "#444444"
-NOTE_PITCH_IN = NOTE_PT * NOTE_SPACING / 72.0     # baseline to baseline inside a note (NOTE_PT in scales.py)
-NOTE_GAP_IN = 0.035                               # extra space between notes
-TYPE_COLORS = ["#0072b2", "#d55e00", "#cc79a7", "#e69f00", "#56b4e9", "#8c564b", "#882255", "#44aa99"]
-# after 8 types the colours repeat with a different line pattern (dashed, dotted, dash-dot)
-TYPE_DASHES: List[Any] = ["-", (0, (5.0, 1.6)), (0, (1.0, 1.3)), (0, (5.0, 1.6, 1.0, 1.6))]
+# NOTE_PITCH_IN (baseline to baseline inside a note), NOTE_GAP_IN (between notes) and NOTES_TOP_IN: scales.py (the
+# plan sizes the standard layout's bottom margin from them)
 # other surfaces (decision 15) and screens / water levels (decision 16)
 SURFACE_DASHES: Dict[str, Any] = {"solid": "-", "dash": (0, (5.0, 2.5)), "dot": (0, (1.0, 1.6))}
 SURFACE_Z, SCREEN_Z, WL_Z = 3.0, 3.6, 4.6     # surfaces under the data lines; water levels over the ground line
@@ -83,6 +102,12 @@ MARK_CLEAR_IN = 0.15                          # water-table marks keep this clea
 WATER = "#1f6fb2"                             # the water level triangles (only they are blue)
 SURFACE_GID, MARK_GID, SCREEN_GID, LEADER_GID = "xsections-surface", "xsections-mark", "xsections-screen", "xsections-leader"
 WL_GID, ATD_GID, WL_LINE_GID, WL_TEXT_GID = "xsections-wl", "xsections-atd", "xsections-wl-line", "xsections-wl-text"
+# 0.3.3: an exploration of a row out of the range that runs below the frame (scales.runs_below): its arrow and TD
+CLIP_GID, CLIP_TD_GID, CLIP_TD_HALO_GID = "xsections-below-frame", "xsections-td-below", "xsections-td-below-halo"
+# 0.3.3: other points (seeps, springs ...): symbol over the ground (4.45) and the water levels (4.6), under the ticks
+POINT_Z = 4.8
+OTHER_GID, OTHER_LEAD_GID = "xsections-other", "xsections-other-lead"
+OTHER_LABEL_GID, OTHER_LABEL_HALO_GID = "xsections-other-label", "xsections-other-label-halo"
 
 _T2P = TextToPath()
 
@@ -142,18 +167,6 @@ def wrap_text(text: str, size: float, width_in: float, fig: Optional[Figure] = N
 # ----------------------------------------------------------------------------- public helpers
 # display_label(hit, settings) is defined in scales.py (plan() sizes the label headroom with it)
 
-def type_styles(model: SectionModel) -> Dict[str, Tuple[str, Any]]:
-    """(colour, line style) per type value: 8 colours solid, then the same colours dashed, dotted
-    and dash-dotted, so that up to 32 types stay distinct on the sheet and in the legend."""
-    types = sorted({h.type_value for h in model.hits if h.type_value})
-    n = len(TYPE_COLORS)
-    return {t: (TYPE_COLORS[i % n], TYPE_DASHES[(i // n) % len(TYPE_DASHES)]) for i, t in enumerate(types)}
-
-
-def type_colors(model: SectionModel) -> Dict[str, str]:
-    return {t: c for t, (c, _) in type_styles(model).items()}
-
-
 def spread_1d(x: np.ndarray, sep: float) -> Tuple[np.ndarray, np.ndarray]:
     """Minimal-displacement 1-D spreading (scales.spread_1d) as numpy arrays: (positions, cluster id)."""
     pos, grp = _spread_1d([float(v) for v in np.asarray(x, float)], sep)
@@ -174,8 +187,11 @@ def _finite_num(v: Optional[float]) -> bool:
     return v is not None and math.isfinite(v)
 
 
-def _z_on(st: np.ndarray, z: np.ndarray, station: float) -> float:
-    """A surface's elevation at `station` (linear between its vertices; a step's upper edge at the step)."""
+def _mark_z(st: np.ndarray, z: np.ndarray, station: float) -> float:
+    """A surface's elevation at `station` for a water-table mark (linear between its vertices; a step's upper edge
+    at the step). The 0.3.0 rule, kept so the sheets never change. core.hover.z_on (the readout and the CSV) differs
+    only at a vertex followed by nan, nan here (no mark where the line ends, nor on a lone vertex the line does not
+    draw), and a rounding error past either end (no mark is that close to an end)."""
     if st.size == 0 or station < st[0] or station > st[-1]:
         return math.nan
     i = int(np.searchsorted(st, station, side="right")) - 1
@@ -219,8 +235,67 @@ def _nice_mult(spacing_in: float, want_in: float) -> int:
     return 10 ** 9
 
 
+def _symbol_artists(shape: str, size: float, k: float, color: str, cx: float, cy: float, sx: float, sy: float,
+                    transform=None) -> list:
+    """The artists of an other-point symbol (scales.symbol_outline / symbol_capsules) centred on (cx, cy), its paper
+    inches scaled by (sx, sy) into the coordinates of `transform` (data: 1 / kx, 1 / kz; the figure's inches: 1, 1).
+    Filled shapes: the colour with a white edge, round joins; the circle an Ellipse; the asterisk one line of
+    NaN-separated strokes with round caps."""
+    kw = {} if transform is None else {"transform": transform}
+    e = symbol_edge_pt(k)
+    if shape == "circle":
+        r = symbol_half_pt(size, k) / 72.0
+        return [Ellipse((cx, cy), width=2.0 * r * sx, height=2.0 * r * sy, fc=color, ec="white", lw=e,
+                        joinstyle="round", **kw)]
+    outline = symbol_outline(shape, size, k)
+    if outline:
+        return [Polygon([(cx + x * sx, cy + y * sy) for x, y in outline], closed=True, fc=color, ec="white", lw=e,
+                        joinstyle="round", **kw)]
+    xs: List[float] = []
+    ys: List[float] = []
+    for c in symbol_capsules(shape, size, k):
+        xs += [cx + c.ax * sx, cx + c.bx * sx, math.nan]
+        ys += [cy + c.ay * sy, cy + c.by * sy, math.nan]
+    return [Line2D(xs[:-1], ys[:-1], color=color, lw=asterisk_width_pt(size, k), solid_capstyle="round",
+                   solid_joinstyle="round", **kw)]
+
+
 # ----------------------------------------------------------------------------- the drawing
 Box = Tuple[float, float, float, float]            # (left, right, bottom, top), paper inches from the frame
+
+
+def _segment_in_box(x0: float, y0: float, x1: float, y1: float, box: Box) -> bool:
+    """True when the segment (x0, y0)-(x1, y1) passes through the inside of `box` (Liang-Barsky clipping)."""
+    left, right, bottom, top = box
+    t0, t1 = 0.0, 1.0
+    dx, dy = x1 - x0, y1 - y0
+    for p, q in ((-dx, x0 - left), (dx, right - x0), (-dy, y0 - bottom), (dy, top - y0)):
+        if abs(p) < 1e-15:
+            if q <= 0.0:
+                return False
+            continue
+        t = q / p
+        if p < 0.0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 >= t1:
+            return False
+    return True
+
+
+class _TdMark(NamedTuple):
+    """A TD label that is not centred under its bottom bar: beside an out-of-range exploration's line, or beside
+    the arrow of one that runs below the frame (paper inches from the frame's lower left)."""
+    text: str
+    x: float                           # anchor (ha)
+    y: float                           # anchor (va)
+    ha: str
+    va: str
+    box: Box                           # what it covers
+    color: str
+    gid: str
+    halo_gid: str
 
 
 class _Layout(NamedTuple):
@@ -232,7 +307,24 @@ class _Layout(NamedTuple):
     texts: List[str]                   # their labels
     spots: List[LabelSpot]             # where the labels go
     marks: List[Box]                   # ticks and labels
-    td: List[Tuple[str, float, float, float]]   # TD labels drawn: (text, centre x, top y, width)
+    td: List[Tuple[str, float, float, float, str]]   # TD labels under their bars: (text, centre x, top y, width, colour)
+    side_td: List[_TdMark]             # the other TD labels (out-of-range rows)
+
+
+class _PointMark(NamedTuple):
+    """An other point on one page (paper inches from the frame's lower left)."""
+    index: int                         # in model.other_points
+    point: Any
+    shape: str
+    size: float
+    color: str
+    x: float                           # symbol centre
+    y: float
+    half_w: float
+    below: float
+    above: float
+    text: str                          # its label
+    spot: Optional[LabelSpot]          # where the label goes (None without one)
 
 
 class _EndMark(NamedTuple):
@@ -264,9 +356,35 @@ class _Painter:
         pos = ax.get_position()
         self.kx = pos.width * fw / (self.x1 - self.x0)     # paper inches per ft (exact on a sheet)
         self.kz = pos.height * fh / (self.z1 - self.z0)
-        self.styles = type_styles(model)
         self.top_blend = blended_transform_factory(ax.transData, ax.transAxes)
         self._lay: Optional[_Layout] = None
+        self._pts: Optional[List[_PointMark]] = None
+
+    def _look(self, h: Hit) -> Tuple[str, Any, float, str]:
+        """(line colour, line style, line width, ink) of an exploration: Black (DATA at the black width, black ink),
+        Gray (LOOK_GRAY at the black width, gray ink) or Color (its symbol's colour at the Color width, black ink; a
+        feature its style draws with no symbol: as Black). The widths are Sheet style's (depth_widths). The line, its
+        bars, the dotted link to the ground and the arrow take the line colour; the tick, the label and the TD the
+        ink."""
+        black, color = depth_widths(self.s)
+        look = getattr(h, "look", "black")
+        if look == "gray":
+            return LOOK_GRAY, "-", black, LOOK_GRAY
+        if look == "color" and getattr(h, "color", ""):
+            return h.color, "-", color, INK
+        return DATA, "-", black, INK
+
+    def _window(self) -> Tuple[float, float]:
+        """The stations this page draws marks for: its range, less a hair at an inner tile edge (the neighbouring
+        sheet shows what hugs the edge whole)."""
+        eps = 1e-6 * max(1.0, self.x1 - self.x0)
+        lo, hi = self.x0 - eps, self.x1 + eps
+        edge_ft = 0.1 / self.kx
+        if self.x0 > eps:
+            lo = self.x0 + edge_ft
+        if self.x1 < self.plan.plot_length - eps and self.x1 < self.model.length - eps:
+            hi = self.x1 - edge_ft
+        return lo, hi
 
     def up(self, inches: float):
         """Data coordinates shifted up by `inches` of paper."""
@@ -327,8 +445,10 @@ class _Painter:
 
     # --- grid
     def grid(self) -> None:
+        """The minor and major grid lines inside the frame, each set as one NaN-separated line: a preset's colours and
+        widths, or the Custom ones (grid_spec), solid, dashed or dotted with absolute dash lengths (GRID_DASH_PT)."""
         ax, p = self.ax, self.plan
-        minor_c, major_c = GRID_COLORS.get(self.s.grid_color, GRID_COLORS["green"])
+        (maj_c, maj_w, maj_s), (min_c, min_w, min_s) = grid_spec(self.s)
         min_gap = 0.035 if self.preview else 0.0           # inches; preview drops lines that would merge
         for axis, lo, hi, minor, major, kk in (("x", self.x0, self.x1, p.h_minor, p.h_major, self.kx),
                                                ("y", self.z0, self.z1, p.v_minor, p.v_major, self.kz)):
@@ -337,7 +457,8 @@ class _Painter:
             minors = _multiples(lo, hi, minor, skip=maj_step) if minor * kk >= min_gap and minor > 0 else []
             if maj_step != major:
                 minors = []
-            for vals, color, lw, z in ((minors, minor_c, MINOR_LW, 0.5), (majors, major_c, MAJOR_LW, 0.6)):
+            for vals, (color, lw, style), z in ((minors, (min_c, min_w, min_s), 0.5),
+                                                (majors, (maj_c, maj_w, maj_s), 0.6)):
                 if not vals:
                     continue
                 a = np.repeat(np.asarray(vals, float), 3)
@@ -346,7 +467,12 @@ class _Painter:
                     xs, ys = a, np.tile([self.z0, self.z1, np.nan], len(vals))
                 else:
                     xs, ys = np.tile([self.x0, self.x1, np.nan], len(vals)), a
-                ax.add_line(Line2D(xs, ys, color=color, lw=lw, solid_capstyle="butt", zorder=z))
+                kw = dict(color=color, lw=lw, solid_capstyle="butt", zorder=z)
+                pat = GRID_DASH_PT.get(style)
+                if pat:   # matplotlib multiplies a dash pattern by the width (lines.scale_dashes): divide here, so
+                    #       it is absolute; each NaN-separated line starts its pattern again (a dash at the frame)
+                    kw.update(ls=(0.0, tuple(v / lw for v in pat)), dash_capstyle="round" if style == "dot" else "butt")
+                ax.add_line(Line2D(xs, ys, **kw))
 
     # --- ground
     def ground(self) -> None:
@@ -415,14 +541,8 @@ class _Painter:
         if self._lay is not None:
             return self._lay
         s, k = self.s, self.k
-        eps = 1e-6 * max(1.0, self.x1 - self.x0)
-        lo, hi = self.x0 - eps, self.x1 + eps
         # at an inner tile edge, leave hits hugging the edge to the neighbouring sheet (it shows them whole)
-        edge_ft = 0.1 / self.kx
-        if self.x0 > eps:
-            lo = self.x0 + edge_ft
-        if self.x1 < self.plan.plot_length - eps and self.x1 < self.model.length - eps:
-            hi = self.x1 - edge_ft
+        lo, hi = self._window()
         hits = [h for h in self.model.hits if lo <= h.station <= hi]
         # ticks and labels are drawn outside the clip box, so leave out any whose tick base is off
         # the plot (a manual elevation range can cut it off; the plan warns about it)
@@ -436,37 +556,32 @@ class _Painter:
         spots = label_layout(x_in, [b + TICK_TO_IN * k for b in base_in], widths, s.label_vertical, k,
                              self.ax_width_in())
         marks = mark_boxes(x_in, base_in, spots, k)
-        self._lay = _Layout(hits, ticked, x_in, base_in, texts, spots, marks, self._td_layout(hits, marks))
+        td, side_td = self._td_layout(hits, marks)
+        self._lay = _Layout(hits, ticked, x_in, base_in, texts, spots, marks, td, side_td)
         return self._lay
 
-    def _td_layout(self, hits: List[Hit], marks: List[Box]) -> List[Tuple[str, float, float, float]]:
-        """ "TD 50'" centred under each bottom bar. A label that would overlap another label or any bar
-        drops to a lower row, and where a row allows it also keeps off the ticks, the exploration labels
-        and the ground line (scales.stack_labels). A label is never drawn outside the plot frame."""
+    def _td_layout(self, hits: List[Hit], marks: List[Box]
+                   ) -> Tuple[List[Tuple[str, float, float, float, str]], List[_TdMark]]:
+        """ "TD 50'" centred under each bottom bar; the TD of an exploration of a row out of the range beside its line
+        when it has no row under it, or beside its arrow when it runs below the frame (scales.td_page_layout, which
+        the plan checks too: a label with no spot is left out, and the plan warns about it). A label is never drawn
+        outside the plot frame."""
         s, k = self.s, self.k
-        items = [h for h in hits if draws_td_label(h, s)]
-        if not items:
-            return []
-        texts = [td_text(h.total_depth) for h in items]
-        widths = [text_width_pt(t, TD_PT * k) / 72.0 for t in texts]
-        frame_w, frame_h = self.ax_width_in(), (self.z1 - self.z0) * self.kz
-        xs = [clamp_centre((h.station - self.x0) * self.kx, w, frame_w, TD_EDGE_IN * k) for h, w in zip(items, widths)]
-        tops = [(h.bottom - self.z0) * self.kz - TD_GAP_IN * k for h in items]
-        text_h, row_h = TD_TEXT_H_IN * k, TD_ROW_IN * k
-        bars = bar_boxes(hits, s, self._x_in, self._z_in, k)
         crosses = ground_test(self.model.ground, lambda x: self.x0 + x / self.kx, self._z_in, GROUND_CLEAR_IN * k)
-        rows = stack_labels(xs, tops, widths, text_h, row_h, TD_PAD_IN * k, obstacles=bars, soft=marks,
-                            crosses=crosses)
-        out = []
-        eps = 1e-6
-        for text, x, w, top, row in zip(texts, xs, widths, tops, rows):
-            if row is None:
-                continue                                    # no free row: the plan warns about it
-            y = top - row * row_h
-            if y - text_h < -eps or y > frame_h + eps:
-                continue                                    # would cross the frame (manual range)
-            out.append((text, x, y, w))
-        return out
+        placed, _left_out = td_page_layout(hits, s, self._x_in, self._z_in, k, self.ax_width_in(), 0.0,
+                                           (self.z1 - self.z0) * self.kz, self.z0,
+                                           lambda t: text_width_pt(t, TD_PT * k) / 72.0, marks, crosses)
+        out: List[Tuple[str, float, float, float, str]] = []
+        side: List[_TdMark] = []
+        for t in placed:
+            ink = self._look(t.hit)[3]
+            if t.kind == "under":
+                out.append((t.text, t.x, t.y, t.w, ink))
+            elif t.kind == "side":
+                side.append(_TdMark(t.text, t.x, t.y, t.ha, "center", t.box, ink, TD_GID, TD_HALO_GID))
+            else:
+                side.append(_TdMark(t.text, t.x, t.y, t.ha, "baseline", t.box, ink, CLIP_TD_GID, CLIP_TD_HALO_GID))
+        return out, side
 
     def _x_in(self, station: float) -> float:
         return (station - self.x0) * self.kx
@@ -479,44 +594,67 @@ class _Painter:
         lay = self.layout()
         if not lay.hits:
             return
-        by_type = s.data_color == "type"
-        for h in lay.hits:
+        # the first row's lines on top: drawn last (rows in descending order; one row: station order as always)
+        for h in sorted(lay.hits, key=lambda h: -getattr(h, "layer_index", 0)):
             if not draws_depth_line(h, s):
                 continue
-            color, ls = self.styles.get(h.type_value, (DATA, "-")) if by_type else (DATA, "-")
-            lw = DEPTH_TYPE_LW if by_type else DEPTH_LW
-            ax.add_line(Line2D([h.station, h.station], [h.top, h.bottom], color=color, lw=lw, ls=ls,
-                               solid_capstyle="butt", dash_capstyle="butt", zorder=3.5))
+            color, ls, lw, _ = self._look(h)
+            below = runs_below(h, self.z0, s)               # out of the range and deeper: stops at the frame
+            ax.add_line(Line2D([h.station, h.station], [h.top, self.z0 if below else h.bottom], color=color, lw=lw,
+                               ls=ls, solid_capstyle="butt", dash_capstyle="butt", zorder=3.5))
             # the bar at the bottom, and the same bar at the top when the top is off the ground line
-            ends = [h.bottom, h.top] if draws_top_cap(h, s) else [h.bottom]
-            ax.plot([h.station] * len(ends), ends, ls="none", marker="_", ms=CROSSBAR_IN * 72 * k, mew=lw,
-                    color=color, zorder=3.5, gid=CAP_GID if len(ends) == 2 else None)
+            if below:
+                ends = [h.top] if draws_top_cap(h, s) else []
+            else:
+                ends = [h.bottom, h.top] if draws_top_cap(h, s) else [h.bottom]
+            if ends:
+                ax.plot([h.station] * len(ends), ends, ls="none", marker="_", ms=CROSSBAR_IN * 72 * k, mew=lw,
+                        color=color, zorder=3.5, gid=CAP_GID if len(ends) == 2 or below else None)
             g = h.ground_at_station
             if g is not None and not math.isnan(g) and (g - h.top) / s.v_scale > 0.05:
                 ax.add_line(Line2D([h.station, h.station], [g, h.top], color=color, lw=0.6,
                                    ls=(0, (1, 1.5)), zorder=3.4))
+            if below:                                       # a small arrow, its tip just above the frame bottom
+                fx, fz = k / self.kx, k / self.kz
+                tip, top = self.z0 + CLIP_ARROW_TIP_IN * fz, self.z0 + (CLIP_ARROW_TIP_IN + CLIP_ARROW_H_IN) * fz
+                ax.add_line(Line2D([h.station - CLIP_ARROW_HALF_IN * fx, h.station, h.station + CLIP_ARROW_HALF_IN * fx],
+                                   [top, tip, top], color=color, lw=lw, solid_joinstyle="miter",
+                                   solid_capstyle="butt", zorder=3.5, gid=CLIP_GID))
         # TD labels: a thin white halo (an outline copy underneath) keeps a label legible where a
         # neighbour's line or the grid runs through it; the copy on top stays real text in the PDF
-        for text, x, y, _ in lay.td:
+        for text, x, y, _, color in lay.td:
             kw = dict(x=self.x0 + x / self.kx, y=self.z0 + y / self.kz, s=text, ha="center", va="top",
-                      fontsize=TD_PT * k, color=INK)
+                      fontsize=TD_PT * k, color=color)
             ax.text(zorder=TD_HALO_Z, gid=TD_HALO_GID,
                     path_effects=[patheffects.Stroke(linewidth=HALO_PT * k, foreground="white")], **kw)
             ax.text(zorder=TD_Z, gid=TD_GID, **kw)
+        for m in lay.side_td:
+            kw = dict(x=self.x0 + m.x / self.kx, y=self.z0 + m.y / self.kz, s=m.text, ha=m.ha, va=m.va,
+                      fontsize=TD_PT * k, color=m.color)
+            ax.text(zorder=TD_HALO_Z, gid=m.halo_gid,
+                    path_effects=[patheffects.Stroke(linewidth=HALO_PT * k, foreground="white")], **kw)
+            ax.text(zorder=TD_Z, gid=m.gid, **kw)
         if not lay.ticked:
             return
         st = np.array([h.station for h in lay.ticked], float)
         base = np.array([tick_base(h, s) for h in lay.ticked], float)
+        inks = [self._look(h)[3] for h in lay.ticked]
         tick_len = (TICK_TO_IN - TICK_FROM_IN) * k
-        ax.plot(st, base, ls="none", marker="|", ms=tick_len * 72, mew=TICK_LW, color=INK, clip_on=False,
-                transform=self.up((TICK_FROM_IN + TICK_TO_IN) / 2 * k), zorder=5)
+        groups = [INK] + [c for c in dict.fromkeys(inks) if c != INK]   # one call per ink, black first
+        for c in groups:
+            idx = [j for j, ink in enumerate(inks) if ink == c]
+            if not idx:
+                continue
+            sel = slice(None) if len(idx) == len(inks) else idx
+            ax.plot(st[sel], base[sel], ls="none", marker="|", ms=tick_len * 72, mew=TICK_LW, color=c, clip_on=False,
+                    transform=self.up((TICK_FROM_IN + TICK_TO_IN) / 2 * k), zorder=5)
         fs = LABEL_PT * k
         anchor = self.up(TICK_TO_IN * k)
         rotation = 90 if s.label_vertical else 0
         for j, spot in enumerate(lay.spots):
             tick_top = lay.base_in[j] + TICK_TO_IN * k
             self._label(lay.texts[j], st[j], base[j], anchor, (spot.x - lay.x_in[j]) * 72,
-                        (spot.base - tick_top) * 72, rotation, spot.moved, fs)
+                        (spot.base - tick_top) * 72, rotation, spot.moved, fs, inks[j])
 
     def ax_width_in(self) -> float:
         return (self.x1 - self.x0) * self.kx
@@ -540,7 +678,7 @@ class _Painter:
                 continue
             hw, th = MARK_HALF_IN * k / self.kx, MARK_H_IN * k / self.kz
             for station in self._mark_stations():
-                zs = _z_on(st, z, station)
+                zs = _mark_z(st, z, station)
                 if not math.isfinite(zs) or not self.z0 <= zs <= self.z1 - th:
                     continue
                 ax.add_patch(Polygon([(station, zs), (station - hw, zs + th), (station + hw, zs + th)], closed=True,
@@ -553,12 +691,16 @@ class _Painter:
         (which reach LEADER_DX_IN + a step to the left), else left out."""
         k, w = self.k, self.ax_width_in()
         busy = [self._x_in(h.station) for h in self.model.hits if self.x0 <= h.station <= self.x1]
+        # the other points' symbols too (0.3.3; nothing changes without them)
+        points = [(m.x, m.half_w) for m in self._points_layout()] if getattr(self.model, "other_points", None) else []
         out = []
         x_in = MARK_FIRST_IN * k
         while x_in < w - 0.3 * k:
             for dx in (0.0, 0.35, -0.35, 0.7, -0.7):
                 x = x_in + dx * k
                 if not 0.3 * k <= x <= w - 0.3 * k:
+                    continue
+                if any(abs(x - px) < hw + MARK_CLEAR_IN * k for px, hw in points):
                     continue
                 if all(not (b - (LEADER_DX_IN + LEADER_STEP_IN + MARK_CLEAR_IN) * k < x < b + MARK_CLEAR_IN * k)
                        for b in busy):
@@ -583,6 +725,13 @@ class _Painter:
         for h in lay.hits:
             x = h.station
             screen = _finite_num(h.screen_top) and _finite_num(h.screen_bottom)
+            levels = h.water_levels
+            if not hit_in_range(h):
+                # a row left out of the range (it never widens it): a level outside the frame is not drawn, nor a
+                # screen whose top is below it (the legend and the notes leave them out too; the panel says so,
+                # hover and the CSV still have them). In-range rows: as always (a manual range clips them)
+                levels = frame_levels(h, self.z0, self.z1)
+                screen = screen and frame_screen(h, self.z0)
             xb = x - BRACKET_DX_IN * fx
             mid = 0.0
             if screen:
@@ -592,7 +741,7 @@ class _Painter:
                                    zorder=SCREEN_Z, gid=SCREEN_GID))
                 mid = (h.screen_top + h.screen_bottom) / 2.0
             n = 0
-            for w in h.water_levels:
+            for w in levels:
                 cx = x - WL_DX_IN * fx                       # just left of the line (the user, 2026-10-05)
                 if w.kind == "measured" and screen:
                     cx = x - (LEADER_DX_IN + n * LEADER_STEP_IN) * fx
@@ -648,12 +797,115 @@ class _Painter:
                              fc=WATER if atd else "white", ec=WATER, lw=WL_LW, joinstyle="miter", zorder=WL_Z + 0.01,
                              gid=ATD_GID if atd else WL_GID))
 
-    def _label(self, text, x, z, anchor, dx_pt, dy_pt, rotation, leader, fs) -> None:
+    # --- other points (seeps, springs ...)
+    def _points_layout(self) -> List[_PointMark]:
+        """Where the other points of this page go (worked out once: the water-table marks and the match notes
+        keep clear of them). Ground-line points rest on the drawn ground line (scales.other_centre_in, in this
+        painter's own paper inches); the others are centred on their elevation. Labels above, clear of the
+        exploration marks and TD labels and of each other (scales.other_label_layout)."""
+        if self._pts is not None:
+            return self._pts
+        pts = getattr(self.model, "other_points", None) or []
+        out: List[_PointMark] = []
+        if pts:
+            s, k = self.s, self.k
+            lay = self.layout()
+            lo, hi = self._window()
+            items = []
+            # labels are drawn outside the clip box (as the exploration labels): a point whose symbol centre the
+            # frame cuts off (a manual elevation range) is left out whole, its label too (the plan warns about it)
+            frame_h = (self.z1 - self.z0) * self.kz
+            tol = 1e-9 * max(1.0, abs(self.z1 - self.z0)) * self.kz
+            for i, p in enumerate(pts):
+                if not lo <= p.station <= hi:
+                    continue
+                shape, size, color = other_symbol(self.model, p)
+                caps = symbol_capsules(shape, size, k)
+                half_w, below, above = symbol_extent(caps)
+                y = other_centre_in(p, caps, self.model.ground, self._x_in, self._z_in, self.kx, k, thin=self.preview)
+                if not _finite_num(y) or not -tol <= y <= frame_h + tol:
+                    continue
+                text = display_label(p, s)
+                items.append((i, p, shape, size, color, self._x_in(p.station), y, half_w, below, above, text))
+            labelled = [it for it in items if it[10]]
+            obstacles = (mark_obstacles(lay.marks, s.label_vertical)
+                         + [(x - w / 2, x + w / 2, y - TD_TEXT_H_IN * k, y) for _, x, y, w, _ in lay.td]
+                         + [t.box for t in lay.side_td]
+                         # every point's symbol: no label covers (and its halo erases) a neighbour's (its own is
+                         # always under its anchor)
+                         + [(x - hw, x + hw, y - b, y + a) for (_, _, _, _, _, x, y, hw, b, a, _) in items])
+            st, gz = self.model.ground.stations, self.model.ground.z
+            i0 = max(bisect.bisect_left(st, self.x0) - 1, 0)
+            i1 = min(bisect.bisect_right(st, self.x1) + 1, len(st))
+            spots = other_label_layout([it[5] for it in labelled],
+                                       [other_label_anchor(it[1], it[6], it[9], self._z_in, k) for it in labelled],
+                                       [text_width_pt(it[10], LABEL_PT * k) / 72.0 for it in labelled], k,
+                                       self.ax_width_in(), obstacles,
+                                       ground_top_fn(st[i0:i1], gz[i0:i1], self._x_in, self._z_in))
+            spot_of = {it[0]: sp for it, sp in zip(labelled, spots)}
+            out = [_PointMark(i, p, shape, size, color, x, y, hw, b, a, text, spot_of.get(i))
+                   for i, p, shape, size, color, x, y, hw, b, a, text in items]
+        self._pts = out
+        return out
+
+    def other_points(self) -> List[PlacedPoint]:
+        """The other points: each row's symbol (explicit geometry, never a matplotlib marker) in its colour, a
+        dotted lead from the ground line down to a symbol placed well below it (LIDAR / field), and the label
+        above (a leader when it had to rise). Returns where each was drawn (the preview's hover boxes)."""
+        ax, s, k = self.ax, self.s, self.k
+        placed: List[PlacedPoint] = []
+        for m in self._points_layout():
+            p = m.point
+            zc = self.z0 + m.y / self.kz
+            for art in _symbol_artists(m.shape, m.size, k, m.color, p.station, zc, 1.0 / self.kx, 1.0 / self.kz):
+                art.set_zorder(POINT_Z)
+                art.set_gid(OTHER_GID)
+                if isinstance(art, Line2D):
+                    ax.add_line(art)
+                else:
+                    ax.add_patch(art)
+            g = p.ground_at_station
+            top_ft = zc + m.above / self.kz
+            if p.how != "line" and _finite_num(g) and (g - p.z) / s.v_scale > 0.05 and g > top_ft:
+                ax.add_line(Line2D([p.station, p.station], [g, top_ft], color=INK, lw=0.6, ls=(0, (1, 1.5)),
+                                   zorder=3.4, gid=OTHER_LEAD_GID))
+            label_top = 0.0
+            if m.spot is not None:
+                sp = m.spot
+                kw = dict(x=self.x0 + sp.x / self.kx, y=self.z0 + sp.base / self.kz, s=m.text, ha="center",
+                          va="bottom", fontsize=LABEL_PT * k, color=INK, clip_on=False)
+                # where an exploration label's leader runs through the name, the halo copy is boxed in white: the
+                # leaders pass behind the name (drawn after them at the same zorder), the name stays readable
+                box = (dict(bbox=dict(boxstyle="square,pad=0.1", fc="white", ec="none", lw=0))
+                       if self._crosses_leader(sp.box) else {})
+                ax.text(zorder=6, gid=OTHER_LABEL_HALO_GID,
+                        path_effects=[patheffects.Stroke(linewidth=HALO_PT * k, foreground="white")], **box, **kw)
+                ax.text(zorder=6, gid=OTHER_LABEL_GID, **kw)
+                if sp.moved:                                 # from the symbol's top (from the ground line over a
+                    start = top_ft                            # symbol below it, where the dotted lead takes over)
+                    if p.how != "line" and _finite_num(g) and g > top_ft:
+                        start = g
+                    ax.add_line(Line2D([p.station, self.x0 + sp.x / self.kx], [start, self.z0 + sp.base / self.kz],
+                                       color=LEADER, lw=0.4, solid_capstyle="butt", clip_on=False, zorder=5.9))
+                label_top = sp.box[3] - m.y
+            placed.append(PlacedPoint(m.index, float(p.station), float(zc), float(m.half_w), float(m.below),
+                                      float(m.above), float(label_top)))
+        return placed
+
+    def _crosses_leader(self, box: Box) -> bool:
+        """True when the leader of a moved exploration label (tick top to the label's foot) runs through `box`
+        (paper inches from the frame's lower left)."""
+        lay = self.layout()
+        tick = TICK_TO_IN * self.k
+        return any(sp.moved and _segment_in_box(x, b + tick, sp.x, sp.base, box)
+                   for x, b, sp in zip(lay.x_in, lay.base_in, lay.spots))
+
+    def _label(self, text, x, z, anchor, dx_pt, dy_pt, rotation, leader, fs, color=INK) -> None:
         arrow = None
         if leader:
             arrow = dict(arrowstyle="-", lw=0.4, color=LEADER, shrinkA=0, shrinkB=0, relpos=(0.5, 0.0))
         self.ax.annotate(text, (x, z), xycoords=anchor, xytext=(dx_pt, dy_pt), textcoords="offset points",
-                         rotation=rotation, ha="center", va="bottom", fontsize=fs, color=INK,
+                         rotation=rotation, ha="center", va="bottom", fontsize=fs, color=color,
                          annotation_clip=False, zorder=6, arrowprops=arrow)
 
     # --- A / A' at the true ends only
@@ -737,10 +989,17 @@ class _Painter:
         frame_w, frame_h = self.ax_width_in(), (self.z1 - self.z0) * self.kz
         mid = frame_h / 2.0
         td_h = TD_TEXT_H_IN * k
-        hard = ([(x - w / 2 - halo, x + w / 2 + halo, y - td_h - halo, y + halo) for _, x, y, w in lay.td]
-                + lay.marks + bar_boxes(lay.hits, s, self._x_in, self._z_in, k))
-        soft = [(self._x_in(h.station) - 0.01, self._x_in(h.station) + 0.01, self._z_in(min(h.top, h.bottom)),
-                 self._z_in(max(h.top, h.bottom))) for h in lay.hits if draws_depth_line(h, s)]
+        hard = ([(x - w / 2 - halo, x + w / 2 + halo, y - td_h - halo, y + halo) for _, x, y, w, _ in lay.td]
+                + lay.marks + bar_boxes(lay.hits, s, self._x_in, self._z_in, k, z_floor=self.z0))
+        hard += [(t.box[0] - halo, t.box[1] + halo, t.box[2] - halo, t.box[3] + halo) for t in lay.side_td]
+        if getattr(self.model, "other_points", None):        # the other points' symbols and labels (0.3.3)
+            for pm in self._points_layout():
+                hard.append((pm.x - pm.half_w, pm.x + pm.half_w, pm.y - pm.below, pm.y + pm.above))
+                if pm.spot is not None:
+                    hard.append(pm.spot.box)
+        soft = [(self._x_in(h.station) - 0.01, self._x_in(h.station) + 0.01,
+                 self._z_in(max(min(h.top, h.bottom), self.z0)), self._z_in(max(h.top, h.bottom)))
+                for h in lay.hits if draws_depth_line(h, s)]
         crosses = ground_test(self.model.ground, lambda x: self.x0 + x / self.kx, self._z_in, GROUND_CLEAR_IN)
         xm, gap = self._x_in(m), 4.0 / 72.0
         best = None
@@ -959,169 +1218,9 @@ def _hbar(fig: Figure, x: float, y: float, settings: Settings) -> None:
         fig.text(x, y - HBAR_NAME_DY_IN, "HORIZONTAL", transform=T, ha="left", va="top", fontsize=SCALE_NAME_PT)
 
 
-def _nb(s: str) -> str:
-    return s.replace(" ", " ")
-
-
-def grid_text(plan: Plan, settings: Settings) -> Tuple[str, str]:
-    """("1 in major", "0.1 in minor"), or "1 × 0.5 in major" when the paper spacings differ."""
-    hm_in, vm_in = plan.h_major / settings.h_scale, plan.v_major / settings.v_scale
-    hn_in, vn_in = plan.h_minor / settings.h_scale, plan.v_minor / settings.v_scale
-    major = f"{fmt_in(hm_in)} in major" if abs(hm_in - vm_in) < 1e-9 else f"{fmt_in(hm_in)} × {fmt_in(vm_in)} in major"
-    minor = f"{fmt_in(hn_in)} in minor" if abs(hn_in - vn_in) < 1e-9 else f"{fmt_in(hn_in)} × {fmt_in(vn_in)} in minor"
-    return major, minor
-
-
 def notes_text(model: SectionModel, settings: Settings, plan: Plan, page: PageLayout) -> List[Tuple[str, str]]:
-    """The wrapped notes under the plot, as (text, color)."""
-    H, V = settings.h_scale, settings.v_scale
-    fh, fv = engineer_face(H), engineer_face(V)
-    major, minor = grid_text(plan, settings)
-    parts = [
-        f"HORIZONTAL {_nb(f'1 in = {fmt_num(H)} ft')} ({ratio(H)})" + (f", {fh} scale" if fh else ""),
-        f"VERTICAL {_nb(f'1 in = {fmt_num(V)} ft')} ({ratio(V)})" + (f", {fv} scale" if fv else ""),
-        f"VERTICAL EXAGGERATION {fmt_num(H / V)}×",
-        f"GRID {major}, {minor} ({_nb(f'{fmt_num(plan.h_major)} × {fmt_num(plan.v_major)} ft')}; "
-        f"{_nb(f'{fmt_num(plan.h_minor)} × {fmt_num(plan.v_minor)} ft')})",
-        f"SHEET {page.sheet_name}",
-    ]
-    note2 = " · ".join(parts)
-    datum = f" ({settings.vertical_datum})" if settings.vertical_datum else ""
-    dem = model.dem_name or "DEM"
-    note3 = f"Ground: {dem}{datum}, sampled every {fmt_num(model.ground.step)} ft."
-    if model.has_explorations:
-        note3 += (f" Explorations within {fmt_num(settings.tolerance_ft)} ft of the section line are "
-                  "projected perpendicular onto it.")
-        if settings.label_offset:
-            note3 += " Labels give each exploration's distance and direction from the section line."
-    if any(draws_depth_line(h, settings) for h in model.hits):
-        note3 += " " + depth_sources_text(settings, any(draws_td_label(h, settings) for h in model.hits))
-    extra = [t for t in (screens_sources(model, settings), surfaces_sources(model)) if t]
-    if extra:
-        note3 += " " + " ".join(f"{t}." for t in extra)
-    return [(note2, INK), (note3, INK)]
-
-
-def screens_sources(model: SectionModel, settings: Settings) -> str:
-    """Where the screens and water levels on the sheet come from, e.g. "Screens: ScrTop to ScrBot (depths below
-    the top); water levels: WL_Elev, ATD_Elev (ATD), table water_levels" ("" when none is drawn)."""
-    if not settings.screens:
-        return ""
-    hits = model.hits
-    parts = []
-    if any(h.screen_top is not None for h in hits):
-        how = "depths below the top" if settings.screen_values != "elevation" else "elevations"
-        parts.append(f"Screens: {settings.screen_top_field} to {settings.screen_bottom_field} ({how})")
-    sources = []
-    used = {w.source for h in hits for w in h.water_levels}
-    if settings.wl_field and settings.wl_field in used:
-        sources.append(settings.wl_field)
-    if settings.atd_field and settings.atd_field in used:
-        sources.append(f"{settings.atd_field} (ATD)")
-    if "table" in used:
-        sources.append("a water-level table")
-    if sources:
-        how = " (depths below the top)" if settings.wl_values == "depth" else ""
-        parts.append(("water levels: " if parts else "Water levels: ") + ", ".join(sources) + how)
-    return "; ".join(parts)
-
-
-def surfaces_sources(model: SectionModel) -> str:
-    """The rasters and model files behind the other surfaces, e.g. "Surfaces: Water table 2024 from wt_2024;
-    mf6_botm band 1 (flat across each cell); Layer 1 head from F9_flowV1.hds (SP 30, step 13); Layer 2 bottom from
-    F9_flowV1.disv.grb" ("" without surfaces)."""
-    items = []
-    for sp in getattr(model, "surfaces", None) or []:
-        if getattr(sp, "detail", ""):                    # a MODFLOW 6 surface: what it is, which file, how drawn
-            text = sp.detail                             # (its one parenthesis already says "flat across each cell")
-        else:
-            text = sp.name if sp.name.startswith(sp.layer_name) else f"{sp.name} from {sp.layer_name}"
-            if sp.band > 1 and "band" not in text:
-                text += f" band {sp.band}"
-            if sp.mode == "cells":
-                text += " (flat across each cell)"
-        items.append(text)
-    return ("Surfaces: " + "; ".join(items)) if items else ""
-
-
-def depth_sources_text(settings: Settings, td: bool = False) -> str:
-    """One sentence per end of the top-to-bottom lines, naming the sources configured, e.g.
-    "Tops: ExploElev where available, otherwise LIDAR at the exploration. Bottoms: top minus ExploDepth." """
-    lidar = "LIDAR at the exploration"
-    tf, mode = settings.top_field, settings.top_mode
-    if mode == "dem" or not tf:
-        tops = f"Tops: {lidar}."
-    elif mode == "field":
-        tops = f"Tops: {tf}."
-    else:
-        tops = f"Tops: {tf} where available, otherwise {lidar}."
-    b, d = settings.bottom_elev_field, settings.depth_field
-    if b and d:
-        bottoms = f"Bottoms: {b} where available, otherwise top minus {d}."
-    elif b:
-        bottoms = f"Bottoms: {b}."
-    elif d:
-        bottoms = f"Bottoms: top minus {d}."
-    else:
-        bottoms = ""
-    return " ".join(p for p in (tops, bottoms, "TD = total depth." if td else "") if p)
-
-
-class NotePart(NamedTuple):
-    """One part of a compact note line (parts are joined with " · ")."""
-    text: str
-    rank: int = 0          # 0: always kept; when a line is too long, the highest ranks are left out first
-    name: str = ""         # a name inside `text` that may be cut short with "…" (the DEM's)
-
-
-def compact_notes(model: SectionModel, settings: Settings, plan: Plan, page: PageLayout) -> List[List[NotePart]]:
-    """The two short note lines of the compact layout, as parts. Line 1: scales, exaggeration, grid, sheet.
-    Line 2: the ground and the explorations; the depth sources, "TD = total depth" and the label offsets
-    only when those marks are on the sheet (the explanations of marks on the sheet are always kept). The
-    datum is in the elevation title, so it is not repeated here."""
-    H, V = settings.h_scale, settings.v_scale
-    fh, fv = engineer_face(H), engineer_face(V)
-    major, minor = grid_text(plan, settings)
-    line1 = [NotePart(f"H 1 in = {fmt_num(H)} ft ({ratio(H)})" + (f", {fh} scale" if fh else "")),
-             NotePart(f"V 1 in = {fmt_num(V)} ft ({ratio(V)})" + (f", {fv} scale" if fv else "")),
-             NotePart(f"VE {fmt_num(H / V)}×", 1),
-             NotePart(f"GRID {major}, {minor}", 2),
-             NotePart(page.sheet_name.split(",")[0], 3)]          # "Letter 11 × 8.5 in"
-    dem = model.dem_name or "DEM"
-    line2 = [NotePart(f"Ground: {dem}, every {fmt_num(model.ground.step)} ft", 0, dem)]
-    if model.has_explorations:
-        line2.append(NotePart(f"Explorations within {fmt_num(settings.tolerance_ft)} ft projected onto the line", 1))
-    if any(draws_depth_line(h, settings) for h in model.hits):
-        line2 += [NotePart(t, 2) for t in depth_sources_short(settings)]
-        if any(draws_td_label(h, settings) for h in model.hits):
-            line2.append(NotePart("TD = total depth"))
-    if model.has_explorations and settings.label_offset:
-        line2.append(NotePart("Labels: offset and direction from the line"))
-    for text, rank in ((screens_sources(model, settings), 3), (surfaces_sources(model), 4)):
-        if text:
-            line2.append(NotePart(text, rank))
-    return [line1, line2]
-
-
-def depth_sources_short(settings: Settings) -> List[str]:
-    """depth_sources_text, short: ["Tops: ExploElev, else LIDAR", "Bottoms: top − ExploDepth"]."""
-    tf, mode = settings.top_field, settings.top_mode
-    if mode == "dem" or not tf:
-        tops = "Tops: LIDAR"
-    elif mode == "field":
-        tops = f"Tops: {tf}"
-    else:
-        tops = f"Tops: {tf}, else LIDAR"
-    b, d = settings.bottom_elev_field, settings.depth_field
-    if b and d:
-        bottoms = f"Bottoms: {b}, else top − {d}"
-    elif b:
-        bottoms = f"Bottoms: {b}"
-    elif d:
-        bottoms = f"Bottoms: top − {d}"
-    else:
-        bottoms = ""
-    return [t for t in (tops, bottoms) if t]
+    """The wrapped notes under the plot, as (text, color) (notes.note_texts)."""
+    return [(t, INK) for t in note_texts(model, settings, plan, page)]
 
 
 NOTE_SIZES = (NOTE_COMPACT_PT, NOTE_MIN_PT)
@@ -1192,15 +1291,28 @@ def fit_compact_notes(lines: Sequence[Sequence[NotePart]], x0: float, x_min: flo
     return x, texts, NOTE_MIN_PT
 
 
-def draw_swatch(fig: Figure, model: SectionModel, styles: Dict[str, Tuple[str, Any]], entry: Any, x: float,
-                y: float) -> None:
-    """The swatch of one legend entry (a type value, or a scales.LegendEntry), SWATCH_IN wide from x, centred on
-    y (paper inches)."""
+def draw_swatch(fig: Figure, model: SectionModel, settings: Settings, entry: Any, x: float, y: float) -> None:
+    """The swatch of one legend entry (a scales.LegendEntry; a plain string, as tests pass, is a black line),
+    SWATCH_IN wide from x, centred on y (paper inches). An exploration row or one colour of its style is a line as
+    its depth lines are drawn: the entry's colour at the Color width, else Gray or black at the black width
+    (depth_widths)."""
     T = fig.dpi_scale_trans
-    if isinstance(entry, str) or entry.kind == "type":
-        c, ls = styles[entry if isinstance(entry, str) else entry.key]
-        fig.add_artist(Line2D([x, x + SWATCH_IN], [y, y], transform=T, color=c, lw=DEPTH_TYPE_LW, ls=ls,
-                              solid_capstyle="butt", dash_capstyle="butt"))
+    if isinstance(entry, str) or entry.kind in ("layer", "style"):
+        black, color = depth_widths(settings)
+        if isinstance(entry, str):
+            c, lw = DATA, black
+        elif entry.color:                             # a Color row's colour (a style item, or a single symbol)
+            c, lw = entry.color, color
+        else:                                         # a Black or Gray row drawn differently from the others
+            info = model.point_layers[entry.key]
+            c, lw = (LOOK_GRAY if getattr(info, "look", "black") == "gray" else DATA), black
+        fig.add_artist(Line2D([x, x + SWATCH_IN], [y, y], transform=T, color=c, lw=lw, solid_capstyle="butt",
+                              gid=LEGEND_LINE_GID))
+    elif entry.kind == "point":                       # an other-points row: its symbol, at most 6 pt
+        info = model.other_layers[entry.key]
+        for art in _symbol_artists(info.shape, min(float(info.size), LEGEND_SYMBOL_MAX_PT), 1.0, info.color,
+                                   x + SWATCH_IN / 2.0, y, 1.0, 1.0, transform=T):
+            fig.add_artist(art)
     elif entry.kind == "surface":
         sp = model.surfaces[entry.key]
         fig.add_artist(Line2D([x, x + SWATCH_IN], [y, y], transform=T, color=sp.color, lw=sp.width,
@@ -1219,29 +1331,29 @@ def draw_swatch(fig: Figure, model: SectionModel, styles: Dict[str, Tuple[str, A
 
 
 def _legend_row(fig: Figure, entries: Sequence[Tuple[str, float, Any]], x0: float, y_mid: float, size: float,
-                model: SectionModel, styles: Dict[str, Tuple[str, Any]]) -> None:
+                model: SectionModel, settings: Settings) -> None:
     """One row of the legend (scales.legend_rows), centred on y_mid."""
     T = fig.dpi_scale_trans
     for text, x, key in entries:
-        if isinstance(key, str) and not key:          # the "Line colors:" / "Legend:" label
+        if isinstance(key, str) and not key:          # the "Legend:" label
             fig.text(x0 + x, y_mid, text, transform=T, ha="left", va="center", fontsize=size)
             continue
-        draw_swatch(fig, model, styles, key, x0 + x, y_mid)
+        draw_swatch(fig, model, settings, key, x0 + x, y_mid)
         fig.text(x0 + x + SWATCH_IN + SWATCH_GAP_IN, y_mid, text, transform=T, ha="left", va="center", fontsize=size)
 
 
 def _bottom_block(fig: Figure, model: SectionModel, settings: Settings, plan: Plan, page: PageLayout) -> None:
-    """The horizontal graphic scale and the notes (and the line-colour legend) under the plot."""
+    """The horizontal graphic scale and the notes (and the legend) under the plot."""
     if settings.show_notes and not settings.compact_layout:
         _bottom_block_standard(fig, model, settings, plan, page)
         return
     # compact, or no notes: the scale bar with a column beside it (two note lines, then the legend)
     T = fig.dpi_scale_trans
     W, edge = page.page_w, edge_in(settings)
-    types = legend_entries(model, settings)
-    band = bottom_band(settings, types)
+    entries = legend_entries(model, settings, plan.z_min, plan.z_max)     # what is drawn inside the frame
+    band = bottom_band(settings, entries)
     overhang, right = hbar_extent_in(settings)
-    need = notes_min_w(settings, types)
+    need = notes_min_w(settings, entries)
     x0 = page.plot_left
     if x0 - overhang + need > W - edge:
         x0 = max(edge + overhang, W - edge - need + overhang)
@@ -1258,10 +1370,9 @@ def _bottom_block(fig: Figure, model: SectionModel, settings: Settings, plan: Pl
         for i, t in enumerate(texts):
             fig.text(col_x, y - i * band.pitch, t, transform=T, ha="left", va="top", fontsize=size, color=INK)
         y -= len(texts) * band.pitch
-    styles = type_styles(model)
-    if types:
-        for i, row in enumerate(legend_rows(types, col_w, band.size)):
-            _legend_row(fig, row, col_x, y - i * band.pitch - band.size / 144.0, band.size, model, styles)
+    if entries:
+        for i, row in enumerate(legend_rows(entries, col_w, band.size)):
+            _legend_row(fig, row, col_x, y - i * band.pitch - band.size / 144.0, band.size, model, settings)
 
 
 def _bottom_block_standard(fig: Figure, model: SectionModel, settings: Settings, plan: Plan,
@@ -1276,7 +1387,7 @@ def _bottom_block_standard(fig: Figure, model: SectionModel, settings: Settings,
     width = min(W - edge - x0, max(NOTES_MIN_W, page.plot_w))
     y_bar = page.plot_bottom - HBAR_DEPTH_IN
     _hbar(fig, x0, y_bar, settings)
-    y = page.plot_bottom - 0.86
+    y = page.plot_bottom - NOTES_TOP_IN
     pitch = NOTE_PITCH_IN
     # one text per wrapped line at a fixed pitch, so the spacing never depends on matplotlib's
     # multi-line layout
@@ -1285,18 +1396,17 @@ def _bottom_block_standard(fig: Figure, model: SectionModel, settings: Settings,
         for i, line in enumerate(lines):
             fig.text(x0, y - i * pitch, line, transform=T, ha="left", va="top", fontsize=NOTE_PT, color=color)
         y -= len(lines) * pitch + NOTE_GAP_IN
-    styles = type_styles(model)
-    entries = legend_entries(model, settings)
+    entries = legend_entries(model, settings, plan.z_min, plan.z_max)
     if entries:
         y -= pitch / 2                                  # rows are centred on y
-        label = "Line colors:" if all(e.kind == "type" for e in entries) else "Legend:"
+        label = "Legend:"
         fig.text(x0, y, label, transform=T, ha="left", va="center", fontsize=NOTE_PT)
         x = x0 + ink_width_pt(fig, label, NOTE_PT) / 72.0 + 0.1
         for e in entries:
             w = SWATCH_IN + SWATCH_GAP_IN + ink_width_pt(fig, e.text, NOTE_PT) / 72.0 + 0.15
             if x + w > x0 + width:
                 x, y = x0 + 0.1, y - pitch
-            draw_swatch(fig, model, styles, e, x, y)
+            draw_swatch(fig, model, settings, e, x, y)
             fig.text(x + SWATCH_IN + SWATCH_GAP_IN, y, e.text, transform=T, ha="left", va="center", fontsize=NOTE_PT)
             x += w
 
@@ -1319,20 +1429,22 @@ def draw_page(fig: Figure, model: SectionModel, settings: Settings, plan: Plan, 
         p.match_lines(page)
         p.hits()
         p.screens()
+        p.other_points()
         p.ends()
         _title(fig, model, settings, page)
         _vbar(fig, settings, plan, page)
         _bottom_block(fig, model, settings, plan, page)
 
 
-def draw_preview(fig: Figure, model: SectionModel, settings: Settings, plan: Plan) -> None:
-    """The whole section fitted into `fig` at the export's vertical exaggeration (letterboxed)."""
+def draw_preview(fig: Figure, model: SectionModel, settings: Settings, plan: Plan) -> List[PlacedPoint]:
+    """The whole section fitted into `fig` at the export's vertical exaggeration (letterboxed). Returns where the
+    other points were drawn (their hover boxes; [] without any)."""
     with matplotlib.rc_context(RC):
         fig.clear()
         fig.patch.set_facecolor("white")
         W, H = (float(v) for v in fig.get_size_inches())
         if W <= 0.5 or H <= 0.5:
-            return
+            return []
         ml, mr, mt, mb = 0.72, 0.72, 0.55, 0.5
         pw = plan.plot_length / settings.h_scale
         ph = (plan.z_max - plan.z_min) / settings.v_scale
@@ -1352,7 +1464,9 @@ def draw_preview(fig: Figure, model: SectionModel, settings: Settings, plan: Pla
         p.preview_matches()
         p.hits()
         p.screens()
+        placed = p.other_points()
         p.ends()
         if not plan.fits and plan.message:
             lines = wrap_text("Does not fit: " + plan.message, 7.0, max(W - 0.3, 1.0))
             fig.text(0.1 / W, 1 - 0.08 / H, "\n".join(lines[:3]), ha="left", va="top", fontsize=7, color=WARN)
+        return placed

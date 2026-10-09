@@ -1,0 +1,31 @@
+{
+ "z_min": 460.0,
+ "z_max": 600.0,
+ "plot_length": 4600.0,
+ "h_major": 500.0,
+ "h_minor": 50.0,
+ "v_major": 20.0,
+ "v_minor": 2.0,
+ "pages": [
+  {
+   "page_w": 11.5,
+   "page_h": 9.25,
+   "sheet_name": "Custom 11.5 \u00d7 9.25 in",
+   "plot_left": 1.13,
+   "plot_bottom": 1.32,
+   "plot_w": 9.2,
+   "plot_h": 7.0,
+   "x_min": 0.0,
+   "x_max": 4600.0,
+   "tile_index": 1,
+   "tile_count": 1,
+   "match_left": null,
+   "match_right": null
+  }
+ ],
+ "fits": true,
+ "message": "Custom 11.5 \u00d7 9.25 in; plot 9.20 \u00d7 7.00 in.",
+ "lowest_z": 484.0999840630425,
+ "lowest_what": "the bottom of W-1",
+ "warnings": []
+}

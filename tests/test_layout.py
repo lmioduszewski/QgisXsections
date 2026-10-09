@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import unittest
 
-from tests.fixtures import REALDATA, STANDARD_LAYOUT, start_app
+from tests.fixtures import CUMBERLAND_AESI, REALDATA, STANDARD_LAYOUT, color_model, start_app
 
 start_app()
 
@@ -223,13 +223,13 @@ class Margins(unittest.TestCase):
 
     def test_legend_rows_add_room(self):
         types = [f"Exploration type {i}" for i in range(12)]
-        for st in (Settings(compact_layout=True, data_color="type"), standard(show_notes=False, data_color="type")):
+        for st in (Settings(compact_layout=True), standard(show_notes=False)):
             plain = margins(st, (600.0, 700.0))
             more = margins(st, (600.0, 700.0), types)
             self.assertGreater(more["bottom"], plain["bottom"])
             band = S.bottom_band(st, types)
             self.assertGreater(len(band.legend), 1)
-        self.assertEqual(margins(standard(data_color="type"), None, types), OLD_MARGIN)   # standard: unchanged
+        self.assertEqual(margins(standard(), None, types), OLD_MARGIN)                    # standard: unchanged
 
     def test_standard_right_margin_holds_the_vertical_scale_label(self):
         # MARGIN's right side holds the vertical scale's top label up to "100 ft" (it ends at the printer edge)
@@ -346,7 +346,7 @@ class SettingsVersions(unittest.TestCase):
         s = Settings()
         self.assertEqual(layout_of(s), (True, 0.5, True, "below"))
         self.assertEqual(s.version, SETTINGS_VERSION)
-        self.assertEqual(SETTINGS_VERSION, 5)                                  # 5 (0.2.0) only adds keys
+        self.assertEqual(SETTINGS_VERSION, 7)                       # 5 (0.2.0), 6 (0.3.3) and 7 (0.3.4) add keys
         self.assertFalse(hasattr(s, "fill_below"))
         self.assertEqual(Settings.from_json(""), s)                             # nothing stored: the defaults
 
@@ -428,7 +428,7 @@ class EveryCombination(unittest.TestCase):
                 self.assertTrue(all((pg.page_w, pg.page_h) == size for pg in p.pages), p.message)
                 if name == "tiled tabloid":
                     self.assertGreater(len(p.pages), 2)
-                mg = margins(s, (p.z_min, p.z_max), S.legend_types(model, s))
+                mg = margins(s, (p.z_min, p.z_max), ())
                 for pg in p.pages:                     # inside the margins, to scale
                     self.assertGreaterEqual(pg.plot_left, mg["left"] - 1e-9)
                     self.assertLessEqual(pg.plot_left + pg.plot_w, pg.page_w - mg["right"] + 1e-9)
@@ -531,17 +531,18 @@ class CompactMarks(unittest.TestCase):
         types = ["Boring", "Test Pit", "CPT", "Vapor Probe", "Monitoring Well", "Direct Push", "Test Trench",
                  "Extraction Well", "Piezometer", "Hand Auger"]
         hits = [(f"X-{i}", t, 200.0 + 400.0 * i, 0.0, 30.0, 20.0, "N") for i, t in enumerate(types)]
-        model = make_model(hits=hits, gap=None)
+        # drawn in Color from a style of 10 categories, one per type: the legend lists them all
+        colors = [c for _v, _lab, c in CUMBERLAND_AESI[:len(types)]]
+        model = color_model(make_model(hits=hits, gap=None), cats=[(t, t, c) for t, c in zip(types, colors)])
         for compact, notes in ((True, True), (True, False), (False, False)):
             for edge in (0.5, 0.3):
-                s = make_settings(data_color="type", compact_layout=compact, show_notes=notes, edge_margin_in=edge,
-                                  v_scale=100.0)
+                s = make_settings(compact_layout=compact, show_notes=notes, edge_margin_in=edge, v_scale=100.0)
                 p = plan(model, s)
                 with self.subTest(compact=compact, notes=notes, edge=edge):
                     page = p.pages[0]
                     fig = draw(model, s, p, page, dpi=300)
                     t = texts_of(fig)
-                    self.assertIn("Line colors:", t)
+                    self.assertIn("Legend:", t)
                     swatches = [a for a in fig.artists if isinstance(a, Line2D)]
                     self.assertEqual(len(swatches), len(types))
                     self.assertEqual(overlapping(furniture(fig)), [])
@@ -627,7 +628,8 @@ class CompactNotes(unittest.TestCase):
                     self.assertIn(part, line1)
                 self.assertTrue(line2.startswith("Ground: Clark_County_2019"))
                 self.assertIn("TD = total depth", line2)                     # TD labels are on the sheet
-                self.assertEqual("Labels: offset and direction from the line" in line2, bool(s.label_offset))
+                self.assertEqual("Labels: distance and direction projected onto the line" in line2,    # 0.3.5
+                                 bool(s.label_offset))
                 self.assertNotIn("NAVD88", line2)                            # the elevation title has the datum
                 self.assertEqual(overlapping(furniture(fig)), [])
                 rgb = np.asarray(fig.canvas.buffer_rgba())[..., :3]
@@ -805,7 +807,7 @@ class RealDataDefaults(unittest.TestCase):
         self.assertEqual(added % 20.0, 0.0)
         self.assertEqual((p.z_min, p.z_max), (580.0, 700.0))
         self.assertAlmostEqual(page.plot_h, (700.0 - 580.0) / 20.0, places=9)
-        mg = margins(s, (p.z_min, p.z_max), S.legend_types(model, s))
+        mg = margins(s, (p.z_min, p.z_max), ())
         self.assertLessEqual(page.plot_bottom + page.plot_h, page.page_h - mg["top"] + 1e-9)
         self.assertGreaterEqual(page.plot_bottom, mg["bottom"] - 1e-9)
         self.assertGreater(page.plot_h + mg["top"] + mg["bottom"] + 1.0, page.page_h)    # less than a major left

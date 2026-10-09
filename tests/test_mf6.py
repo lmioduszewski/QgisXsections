@@ -18,7 +18,7 @@ from unittest import mock
 
 import numpy as np
 
-from tests.fixtures import REALDATA, ROOT, X0, Y0
+from tests.fixtures import REALDATA, ROOT, X0, Y0, budget, timing_test
 
 from xsections.core import mf6  # noqa: E402
 from xsections.core.mf6 import MF6Error  # noqa: E402
@@ -1161,6 +1161,7 @@ class RealModels(unittest.TestCase):
     def setUp(self):
         mf6.clear_cache()
 
+    @timing_test
     def test_f9_grid(self):
         t0 = time.perf_counter()
         g = mf6.read_grid(os.path.join(F9, "F9_flowV1.disv.grb"))
@@ -1169,7 +1170,7 @@ class RealModels(unittest.TestCase):
         b = g.cell_bounds_world()
         dtb = time.perf_counter() - t0
         print(f"\n  F9 .grb read {dt:.3f} s, cell bounds {dtb:.3f} s: {g.summary()}")
-        self.assertLess(dt, 2.0)
+        self.assertLess(dt, budget(2.0))
         self.assertEqual((g.kind, g.nlay, g.ncpl, g.ncells, len(g.verts)), ("disv", 3, 27688, 83064, 56478))
         self.assertEqual(g.length_units, "feet")
         self.assertEqual((g.xorigin, g.yorigin, g.angrot), (0.0, 0.0, 0.0))
@@ -1183,13 +1184,14 @@ class RealModels(unittest.TestCase):
         self.assertTrue((g.layer_tops() - g.botm > 0).all())
         print(f"  F9 sums: TOP {g.top.sum():,.3f}, BOTM {g.botm.sum(axis=1).round(3).tolist()}")
 
+    @timing_test
     def test_f9_text_equals_grb(self):
         g = mf6.read_grid(os.path.join(F9, "F9_flowV1.disv.grb"))
         t0 = time.perf_counter()
         t = mf6.read_grid(os.path.join(F9, "F9_flowV1.disv"))
         dt = time.perf_counter() - t0
         print(f"\n  F9 .disv text (6.5 MB) read {dt:.3f} s")
-        self.assertLess(dt, 5.0)
+        self.assertLess(dt, budget(5.0))
         self.assertEqual((t.nlay, t.ncpl, t.length_units, t.source), (3, 27688, "feet", "text"))
         np.testing.assert_array_equal(t.top, g.top)
         np.testing.assert_array_equal(t.botm, g.botm)

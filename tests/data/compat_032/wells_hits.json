@@ -1,0 +1,137 @@
+[
+ {
+  "fid": 1,
+  "label": "W-1",
+  "type_value": "",
+  "x": 1201400.0,
+  "y": 652020.0,
+  "station": 900.0018000036024,
+  "offset": 20.000040000080052,
+  "side": "L",
+  "direction": "N",
+  "ground_at_station": 523.999998304579,
+  "ground_at_point": 524.0999840630425,
+  "top": 524.0999840630425,
+  "top_source": "dem",
+  "bottom": 484.0999840630425,
+  "in_gap": false,
+  "flags": [],
+  "bottom_source": "depth",
+  "total_depth": 40.0,
+  "screen_top": 499.0999840630425,
+  "screen_bottom": 489.0999840630425,
+  "water_levels": [
+   {
+    "elev": 519.1,
+    "kind": "atd",
+    "date": "",
+    "source": "ATD_Elev"
+   },
+   {
+    "elev": 516.1,
+    "kind": "measured",
+    "date": "6/12/2025",
+    "source": "WL_Elev"
+   },
+   {
+    "elev": 512.0,
+    "kind": "measured",
+    "date": "3/1/2025",
+    "source": "table"
+   }
+  ]
+ },
+ {
+  "fid": 2,
+  "label": "W-2",
+  "type_value": "",
+  "x": 1202500.0,
+  "y": 651970.0,
+  "station": 2000.0040000080053,
+  "offset": 30.00006000012008,
+  "side": "R",
+  "direction": "S",
+  "ground_at_station": 534.999993218316,
+  "ground_at_point": 534.8499857584636,
+  "top": 534.8499857584636,
+  "top_source": "dem",
+  "bottom": 504.8499857584636,
+  "in_gap": false,
+  "flags": [
+   "screen top given without the bottom: no screen"
+  ],
+  "bottom_source": "depth",
+  "total_depth": 30.0,
+  "screen_top": null,
+  "screen_bottom": null,
+  "water_levels": [
+   {
+    "elev": 528.85,
+    "kind": "atd",
+    "date": "1/5/2024",
+    "source": "table"
+   },
+   {
+    "elev": 516.85,
+    "kind": "atd",
+    "date": "1/6/2024",
+    "source": "table"
+   }
+  ]
+ },
+ {
+  "fid": 3,
+  "label": "B-9",
+  "type_value": "",
+  "x": 1203474.6029243271,
+  "y": 652158.0413370614,
+  "station": 3000.0060000119997,
+  "offset": 15.000030000019871,
+  "side": "L",
+  "direction": "N",
+  "ground_at_station": 545.5075000599455,
+  "ground_at_point": 545.5362285311226,
+  "top": 545.5362285311226,
+  "top_source": "dem",
+  "bottom": 520.5362285311226,
+  "in_gap": false,
+  "flags": [],
+  "bottom_source": "depth",
+  "total_depth": 25.0,
+  "screen_top": null,
+  "screen_bottom": null,
+  "water_levels": [
+   {
+    "elev": 541.5362359285785,
+    "kind": "atd",
+    "date": "",
+    "source": "table"
+   }
+  ]
+ },
+ {
+  "fid": 4,
+  "label": "W-3",
+  "type_value": "",
+  "x": 1203960.6997640769,
+  "y": 652277.7696227141,
+  "station": 3500.007000014026,
+  "offset": 10.000020000109885,
+  "side": "R",
+  "direction": "S",
+  "ground_at_station": 551.0150114166847,
+  "ground_at_point": 550.9958456611777,
+  "top": 550.9958456611777,
+  "top_source": "dem",
+  "bottom": 520.9958456611777,
+  "in_gap": false,
+  "flags": [
+   "water level 20 ft is below the bottom (521 ft): left out (water levels are read as elevations)"
+  ],
+  "bottom_source": "depth",
+  "total_depth": 30.0,
+  "screen_top": null,
+  "screen_bottom": null,
+  "water_levels": []
+ }
+]

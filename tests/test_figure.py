@@ -2,13 +2,12 @@
 import math
 import unittest
 
-from tests.fixtures import STANDARD_LAYOUT, start_app
+from tests.fixtures import STANDARD_LAYOUT, color_model, start_app
 
 start_app()
 
 import numpy as np                                                    # noqa: E402
 from matplotlib.figure import Figure                                  # noqa: E402
-from matplotlib.lines import Line2D                                    # noqa: E402
 from matplotlib.text import Annotation, Text                         # noqa: E402
 
 from xsections.core.model import GroundProfile, Hit, SectionModel, Settings   # noqa: E402
@@ -179,10 +178,11 @@ class DrawPageTest(unittest.TestCase):
         self.assertEqual(ann["CPT-1"].get_rotation(), 90.0)
 
     def test_station_labels_and_horizontal(self):
-        s = make_settings(distance_labels="station", label_vertical=False, label_offset=True, data_color="type",
+        s = make_settings(distance_labels="station", label_vertical=False, label_offset=True,
                           grid_color="gray", shade_below=True, title="Test project")
+        model = color_model(make_model())             # drawn in Color: the legend lists its categories
         fig = Figure()
-        F.draw_page(fig, self.model, s, plan(self.model, s), plan(self.model, s).pages[0])
+        F.draw_page(fig, model, s, plan(model, s), plan(model, s).pages[0])
         fig.canvas.draw()
         ax = fig.axes[0]
         labels = [t.get_text() for t in ax.get_xticklabels() if t.get_text()]
@@ -192,14 +192,15 @@ class DrawPageTest(unittest.TestCase):
         self.assertIn("Station (ft)", t)
         self.assertIn("MW-3 · 80 ft NE", t)
         self.assertIn("Test project", t)
-        self.assertIn("Line colors:", t)
+        self.assertIn("Legend:", t)
         rot = {a.get_rotation() for a in ax.texts if isinstance(a, Annotation) and "·" in a.get_text()}
         self.assertEqual(rot, {0.0})
 
     def test_display_label(self):
         h = self.model.hits[0]
+        h.direction = "S"      # 0.3.5: the direction of projection: B-1, left of the eastward line (north), went S
         self.assertEqual(F.display_label(h, make_settings()), "B-1")
-        self.assertEqual(F.display_label(h, make_settings(label_offset=True)), "B-1 · 35 ft N")
+        self.assertEqual(F.display_label(h, make_settings(label_offset=True)), "B-1 · 35 ft S")
 
     def test_spread_1d(self):
         pos, grp = F.spread_1d(np.array([0.0, 0.01, 0.02, 5.0]), 0.1)
@@ -370,15 +371,15 @@ class SheetLayoutTest(unittest.TestCase):
                         lab_left)                                              # and clear of the labels
 
     def test_note_lines_do_not_overlap(self):
-        model = make_model()
+        model = color_model(make_model())             # drawn in Color: the legend lists its categories
         model.dem_name = "Clark_County_2019_LIDAR_bare_earth_DEM_1ft_USft_NAVD88_mosaic_v3_final_reviewed"
-        s = make_settings(label_offset=True, data_color="type")
+        s = make_settings(label_offset=True)
         fig, p, page = drawn(model, s)
         r = fig.canvas.get_renderer()
         below = page.plot_bottom - 0.8
         block = [t for t in fig.texts if t.get_fontsize() == F.NOTE_PT
                  and t.get_window_extent(r).y1 / fig.dpi < below]
-        self.assertIn("Line colors:", [t.get_text() for t in block])
+        self.assertIn("Legend:", [t.get_text() for t in block])
         n3 = [t for t in block if t.get_text().startswith("Ground: ")]
         self.assertEqual(len(n3), 1)
         boxes = [(t.get_text(), t.get_window_extent(r)) for t in block]
@@ -393,26 +394,6 @@ class SheetLayoutTest(unittest.TestCase):
             self.assertTrue(abs(a - b - F.NOTE_PITCH_IN) < 1e-9 or abs(a - b - F.NOTE_PITCH_IN - F.NOTE_GAP_IN) < 1e-9,
                             a - b)
         self.assertGreaterEqual(min(t.get_window_extent(r).y0 for t in block) / fig.dpi, 0.5)
-
-    def test_many_types_stay_distinct(self):
-        types = ["Boring", "Test Pit", "CPT", "Vapor Probe", "Monitoring Well", "Direct Push", "Test Trench",
-                 "Extraction Well", "Piezometer", "Hand Auger", "Sonic", "Air Rotary"]
-        hits = [(f"X-{i}", t, 200.0 + 350.0 * i, 0.0, 30.0, 20.0, "N") for i, t in enumerate(types)]
-        model = make_model(hits=hits, gap=None)
-        styles = F.type_styles(model)
-        self.assertEqual(len(styles), 12)
-        self.assertEqual(len({(c, str(ls)) for c, ls in styles.values()}), 12)
-        fig, p, page = drawn(model, make_settings(data_color="type"), dpi=72)
-
-        def style(ln):
-            return ln.get_color(), repr(ln._unscaled_dash_pattern)
-
-        depth = [ln for ln in fig.axes[0].lines if ln.get_linewidth() == F.DEPTH_TYPE_LW and ln.get_marker() != "_"]
-        self.assertEqual(len(depth), 12)
-        self.assertEqual(len({style(ln) for ln in depth}), 12)
-        swatches = [a for a in fig.artists if isinstance(a, Line2D) and a.get_linewidth() == F.DEPTH_TYPE_LW]
-        self.assertEqual(len(swatches), 12)
-        self.assertEqual({style(a) for a in swatches}, {style(ln) for ln in depth})   # legend matches the lines
 
     def test_tick_not_raised_without_a_line(self):
         hits = HITS + [("TP-9", "Test Pit", 3150.0, 9.0, None, 20.0, "N")]      # top 9 ft up, no depth

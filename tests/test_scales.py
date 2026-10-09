@@ -415,11 +415,11 @@ class LabelsAndManualRange(unittest.TestCase):
         self.assertEqual(short.z_max, 350.0)
         m = model(hits=hits)
         for h in m.hits:
-            h.offset, h.direction = 140.0, "NW"
-        s = settings(label_offset=True)                      # "MW-12R · 140 ft NW" is about 1.1 in long
+            h.offset, h.direction = 140.0, "SE"              # 0.3.5: projected SE onto the line (it lies NW of it)
+        s = settings(label_offset=True)                      # "MW-12R · 140 ft SE" is about 0.95 in long
         p = plan(m, s)
         need = max(S.tick_base(h, s) for h in m.hits) + (S.TICK_TO_IN + S.LABEL_GAP_IN + S.LEADER_RISE_IN
-                                                         + S.text_width_in("MW-12R · 140 ft NW", 7.0)) * 50.0
+                                                         + S.text_width_in("MW-12R · 140 ft SE", 7.0)) * 50.0
         self.assertGreaterEqual(p.z_max, need)
         self.assertGreater(p.z_max, short.z_max)
 

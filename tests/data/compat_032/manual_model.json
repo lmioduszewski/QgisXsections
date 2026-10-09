@@ -1,0 +1,17 @@
+{
+ "warnings": [
+  "No DEM data along 2.7% of the line (1 gap).",
+  "Left out past the ends of the line: B-pre, B-post.",
+  "B-2: BotElev 547.4 ft is not below the top (542.4 ft): used top minus ExploDepth",
+  "MW-2: ExploElev 205.6 ft ignored: 339.0 ft from LIDAR",
+  "B-3: station in a DEM gap",
+  "B-3: no top elevation (no ExploElev value and no LIDAR at the point)"
+ ],
+ "beyond_ends": [
+  "B-pre",
+  "B-post"
+ ],
+ "near_count": 0,
+ "has_explorations": true,
+ "points_name": "Explorations"
+}

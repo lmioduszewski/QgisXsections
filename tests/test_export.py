@@ -9,11 +9,15 @@ from tests.fixtures import start_app
 
 start_app()
 
+import numpy as np                                                        # noqa: E402
+from matplotlib.colors import to_rgba                                    # noqa: E402
+from matplotlib.figure import Figure                                     # noqa: E402
 from pypdf import PdfReader                                               # noqa: E402
 
 from tests import measure as M                                           # noqa: E402
 from tests.test_figure import make_model, make_settings                  # noqa: E402
 from xsections.core.model import SectionError                           # noqa: E402
+from xsections.render import figure as F                                 # noqa: E402
 from xsections.render.export import export, output_paths                # noqa: E402
 from xsections.render.pdfprefs import read_print_prefs                  # noqa: E402
 from xsections.render.scales import plan                                # noqa: E402
@@ -192,6 +196,99 @@ class TopCapsAndTDLabelsToScale(ExportCase):
             if h.total_depth is not None:
                 self.assertIn(f"TD {h.total_depth:g}'", text)
         self.assertIn("TD = total depth.", text)
+
+
+
+class CustomGrid(ExportCase):
+    """(0.3.4) A Custom grid: its own colours, widths and line styles. Dashes and dots are absolute lengths on paper
+    (4 pt on / 2 pt off; 0.6 pt on / 1.6 pt off with round caps) whatever the width; the frame stays 0.9 pt black
+    and the sheet still measures exactly to scale. (Only the frame is measured here: the grid finder of
+    tests/measure.py needs solid green or gray lines.)"""
+
+    MAJOR, MINOR = "#5f9a72", "#a8c8b2"          # light: ink darker than 60 per channel would be taken for the frame
+
+    def custom(self, major_w, minor_w, **over):
+        kw = dict(grid_color="custom", grid_major_color=self.MAJOR, grid_major_width=major_w, grid_major_style="dash",
+                  grid_minor_color=self.MINOR, grid_minor_width=minor_w, grid_minor_style="dot",
+                  allowed_sheets=["letter"])
+        return make_settings(**{**kw, **over})
+
+    @staticmethod
+    def grid_lines(fig):
+        """{zorder: [Line2D]} of the minor (0.5) and major (0.6) grid lines of the sheet's or the preview's axes."""
+        ax = fig.axes[0]
+        return {z: [ln for ln in ax.lines if ln.get_zorder() == z] for z in (0.5, 0.6)}
+
+    def assertPattern(self, ln, pattern):
+        offset, seq = ln._dash_pattern                       # points on paper, as drawn
+        self.assertEqual(offset, 0.0)
+        self.assertEqual(len(seq), len(pattern))
+        for got, want in zip(seq, pattern):
+            self.assertAlmostEqual(got, want, places=9)
+
+    def test_dashes_are_absolute_at_any_width(self):
+        model = make_model()
+        for major_w, minor_w in ((0.35, 1.5), (1.5, 0.35)):
+            s = self.custom(major_w, minor_w)
+            p = plan(model, s)
+            fig = Figure(dpi=72)
+            F.draw_page(fig, model, s, p, p.pages[0])
+            lines = self.grid_lines(fig)
+            for z, color, lw, pattern, cap in ((0.6, self.MAJOR, major_w, F.GRID_DASH_PT["dash"], "butt"),
+                                               (0.5, self.MINOR, minor_w, F.GRID_DASH_PT["dot"], "round")):
+                self.assertEqual(len(lines[z]), 2, (z, major_w))         # one line of each kind along x and y
+                for ln in lines[z]:
+                    self.assertEqual((ln.get_color(), ln.get_linewidth()), (color, lw))
+                    self.assertPattern(ln, pattern)
+                    self.assertEqual((ln.get_dash_capstyle(), ln.get_solid_capstyle()), (cap, "butt"))
+            self.assertEqual(F.GRID_DASH_PT, {"dash": (4.0, 2.0), "dot": (0.6, 1.6)})
+            for sp in fig.axes[0].spines.values():                 # the frame: 0.9 pt black whatever the grid
+                self.assertEqual((sp.get_linewidth(), sp.get_edgecolor()), (F.FRAME_LW, to_rgba(F.INK)))
+            self.assertEqual(F.FRAME_LW, 0.9)
+            # the preview draws its grid the same way
+            pv = Figure(figsize=(9, 3.5), dpi=100)
+            F.draw_preview(pv, model, s, p)
+            majors = self.grid_lines(pv)[0.6]
+            self.assertTrue(majors)
+            for ln in majors:
+                self.assertEqual((ln.get_color(), ln.get_linewidth()), (self.MAJOR, major_w))
+                self.assertPattern(ln, F.GRID_DASH_PT["dash"])
+        # solid custom lines are plain solid lines, as the presets draw them
+        s = self.custom(0.5, 0.25, grid_major_style="solid", grid_minor_style="solid")
+        p = plan(model, s)
+        fig = Figure(dpi=72)
+        F.draw_page(fig, model, s, p, p.pages[0])
+        for ln in self.grid_lines(fig)[0.5] + self.grid_lines(fig)[0.6]:
+            self.assertEqual(ln.get_linestyle(), "-")
+
+    def test_svg_dash_arrays(self):
+        model = make_model()
+        s = self.custom(0.35, 1.5)
+        out = export(model, s, plan(model, s), os.path.join(self.dir, "c.svg"), "svg")
+        with open(out[0], encoding="utf-8") as fh:
+            text = fh.read()
+        arrays = [tuple(float(v) for v in re.split(r"[ ,]+", m.strip()) if v)
+                  for m in re.findall(r"stroke-dasharray:\s*([0-9., ]+)", text)]
+
+        def has(pattern):
+            return any(len(a) == 2 and all(abs(g - w) < 1e-3 for g, w in zip(a, pattern)) for a in arrays)
+        self.assertTrue(has((4.0, 2.0)), arrays)
+        self.assertTrue(has((0.6, 1.6)), arrays)
+        self.assertIn("stroke-linecap: round", text)
+
+    @unittest.skipUnless(_gdal_pdf_ok(), "needs GDAL's PDF driver")
+    def test_pdf_frame_still_to_scale(self):
+        model = make_model()
+        s = self.custom(0.35, 1.5)
+        p = plan(model, s)
+        page = p.pages[0]
+        out = export(model, s, p, os.path.join(self.dir, "c.pdf"), "pdf")
+        self.check_pdf(out[0], p.pages)
+        rgb, _ = M.load_pdf_raster(out[0], 300)
+        left, right, _r0, _r1 = M.frame_columns(rgb)
+        self.assertAlmostEqual(right - left, page.plot_w * 300, delta=1.0)
+        top, bottom, _c0, _c1 = M.frame_columns(np.ascontiguousarray(rgb.transpose(1, 0, 2)))
+        self.assertAlmostEqual(bottom - top, page.plot_h * 300, delta=1.0)
 
 
 if __name__ == "__main__":

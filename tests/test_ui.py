@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.fixtures import LINE, default_settings, line_length, load_project, start_app
+from tests.fixtures import LINE, default_settings, explo_row, line_length, load_project, start_app
 
 APP = start_app()
 
@@ -25,7 +25,7 @@ from qgis.PyQt.QtGui import QKeyEvent  # noqa: E402
 from qgis.PyQt.QtWidgets import QLabel  # noqa: E402
 
 from xsections.core.model import (GroundProfile, Hit, PageLayout, Plan, SectionError,  # noqa: E402
-                                  SETTINGS_VERSION, SectionModel, Settings)
+                                  SETTINGS_VERSION, SectionModel, Settings, as_rows, layer_rows)
 from xsections.ui import settings_store  # noqa: E402
 from xsections.ui.dock import (BOTTOM_ELEV_NAMES, CSV_COLUMNS, DEPTH_NAMES, DRAWN, LABEL_NAMES,  # noqa: E402
                                LINES_LAYER_NAME, NO_TYPES, TOP_NAMES, XSectionsDock, compass16, depth_sources_line,
@@ -216,22 +216,22 @@ class DockTests(unittest.TestCase):
     def test_combos_filled_from_project(self):
         d = self.dock
         self.assertIs(d.dem_layer.currentLayer(), self.dem)
-        self.assertIs(d.points_layer.currentLayer(), self.pts)
+        self.assertIs(explo_row(d).layer_combo.currentLayer(), self.pts)
         self.assertIs(d.line_layer.currentLayer(), self.lines)
         self.assertEqual(d.line_feature.currentData(), 1)
         self.assertEqual(d.line_feature.currentText(), "A")
-        self.assertEqual(d.label_field.currentField(), "ExploName")
-        self.assertEqual(d.type_field.currentField(), "ExploType")
-        self.assertEqual(d.top_field.currentField(), "ExploElev")
-        self.assertEqual(d.bottom_elev_field.currentField(), "")          # the fixture has no bottom elevations
-        self.assertEqual(d.depth_field.currentField(), "ExploDepth")
+        self.assertEqual(explo_row(d).label_field.currentField(), "ExploName")
+        self.assertEqual(explo_row(d).type_field.currentField(), "ExploType")
+        self.assertEqual(explo_row(d).top_field.currentField(), "ExploElev")
+        self.assertEqual(explo_row(d).bottom_elev_field.currentField(), "")   # the fixture has no bottom elevations
+        self.assertEqual(explo_row(d).depth_field.currentField(), "ExploDepth")
         self.assertEqual(d.dem_band.currentBand(), 1)
-        rows = {d.type_list.topLevelItem(i).text(0): d.type_list.topLevelItem(i).text(1)
-                for i in range(d.type_list.topLevelItemCount())}
+        rows = {explo_row(d).type_list.topLevelItem(i).text(0): explo_row(d).type_list.topLevelItem(i).text(1)
+                for i in range(explo_row(d).type_list.topLevelItemCount())}
         self.assertEqual(rows, {"Boring": "6", "CPT": "1", "Monitoring Well": "2", "Test Pit": "1"})
         s = d.settings()
-        self.assertEqual(s.types, [])
-        self.assertEqual((s.dem_layer_id, s.points_layer_id, s.line_layer_id, s.line_fid),
+        self.assertEqual(layer_rows(s)[0]["types"], [])
+        self.assertEqual((s.dem_layer_id, layer_rows(s)[0]["layer_id"], s.line_layer_id, s.line_fid),
                          (self.dem.id(), self.pts.id(), self.lines.id(), 1))
         self.assertEqual(s.tolerance_ft, Settings().tolerance_ft)
 
@@ -269,31 +269,34 @@ class DockTests(unittest.TestCase):
                              v_minor=2.0, z_mode="manual", z_min=400.0, z_max=700.0, below_in=0.5,
                              fill_grid="both", distance_labels="station", sheet="tabloid",
                              allowed_sheets=["letter", "tabloid", "ansid"], tile=False, export_format="png",
-                             dpi=600, title="Site X", grid_color="gray", data_color="type", shade_below=True, show_bends=False,
+                             dpi=600, title="Site X", grid_color="custom", grid_major_color="#1f6fb2",
+                             grid_major_width=1.25, grid_major_style="dash", grid_minor_color="#c2185b",
+                             grid_minor_width=0.5, grid_minor_style="dot", grid_custom_used=True,
+                             depth_lw_black=1.0, depth_lw_color=2.25, shade_below=True, show_bends=False,
                              compact_layout=False, edge_margin_in=0.3, show_notes=False,
                              start_label="B", end_label="B'", vertical_datum="NGVD29", dem_z_units="ft",
                              tolerance_ft=75.0, zero_is_missing=False, top_max_diff_ft=10.0, td_label=False)
         self.dock.apply_settings(s)
-        self.assertEqual(self.dock.settings(), s)
+        self.assertEqual(self.dock.settings(), as_rows(s))
 
         drawn = Settings(dem_layer_id=self.dem.id(), points_layer_id=self.pts.id(), label_field="ExploName",
                          line_wkt="LineString (1200600 652000, 1204000 652100)", line_crs_authid=CRS,
                          types=[NO_TYPES], type_field="ExploType", depth_field="ExploDepth", top_field="ExploElev")
         self.dock.apply_settings(drawn)
         self.assertEqual(self.dock.line_feature.currentData(), DRAWN)
-        self.assertEqual(self.dock.settings(), drawn)
+        self.assertEqual(self.dock.settings(), as_rows(drawn))
 
     def test_type_checks(self):
         d = self.dock
-        d.btn_types_none.click()
-        self.assertEqual(d.settings().types, [NO_TYPES])
-        d.type_list.topLevelItem(0).setCheckState(0, Qt.CheckState.Checked)      # Boring
-        self.assertEqual(d.settings().types, ["Boring"])
-        d.btn_types_all.click()
-        self.assertEqual(d.settings().types, [])
-        d.type_field.setField("")
-        self.assertEqual(d.settings().types, [])
-        self.assertFalse(d.type_list.isEnabled())
+        explo_row(d).btn_types_none.click()
+        self.assertEqual(layer_rows(d.settings())[0]["types"], [NO_TYPES])
+        explo_row(d).type_list.topLevelItem(0).setCheckState(0, Qt.CheckState.Checked)      # Boring
+        self.assertEqual(layer_rows(d.settings())[0]["types"], ["Boring"])
+        explo_row(d).btn_types_all.click()
+        self.assertEqual(layer_rows(d.settings())[0]["types"], [])
+        explo_row(d).type_field.setField("")
+        self.assertEqual(layer_rows(d.settings())[0]["types"], [])
+        self.assertFalse(explo_row(d).type_list.isEnabled())
 
     def test_new_points_layer_guesses_fields(self):
         lyr = QgsVectorLayer(f"Point?crs={CRS}", "Borings", "memory")
@@ -306,8 +309,8 @@ class DockTests(unittest.TestCase):
         f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*LINE[0])))
         lyr.dataProvider().addFeatures([f])
         self.prj.addMapLayer(lyr)
-        self.dock.points_layer.setLayer(lyr)
-        d = self.dock
+        explo_row(self.dock).layer_combo.setLayer(lyr)
+        d = explo_row(self.dock)
         self.assertEqual((d.label_field.currentField(), d.type_field.currentField(), d.top_field.currentField(),
                           d.bottom_elev_field.currentField(), d.depth_field.currentField()),
                          ("Name", "Type", "TopElev", "BtmElev", "TotalDepth"))
@@ -334,15 +337,16 @@ class DockTests(unittest.TestCase):
     # ---- top-to-bottom line (R1, R3)
     def test_depth_group_widgets(self):
         d = self.dock
-        combos = (d.top_field, d.bottom_elev_field, d.depth_field)
+        combos = (explo_row(d).top_field, explo_row(d).bottom_elev_field, explo_row(d).depth_field)
         from qgis.core import QgsFieldProxyModel
         for c in combos:
             self.assertTrue(c.allowEmptyFieldName())
-            self.assertEqual(c.filters(), QgsFieldProxyModel.Filter.Numeric)
+            self.assertEqual(c.filters(), QgsFieldProxyModel.Filter.Numeric        # 0.3.5: and text fields
+                             | QgsFieldProxyModel.Filter.String)
         self.assertEqual([d.top_mode.itemText(i) for i in range(d.top_mode.count())],
                          ["Table, else LIDAR at the exploration", "LIDAR at the exploration", "Table only"])
         self.assertEqual(d.depth_line.text(), "Draw a line from top to bottom")
-        self.assertEqual(d.td_label.text(), "Label TD 50'")
+        self.assertEqual(d.td_label.text(), "Label the total depth (TD 50′)")
         self.assertTrue(d.td_label.isChecked() and d.depth_line.isChecked() and d.zero_missing.isChecked())
         self.assertEqual(d.top_max_diff.value(), 25.0)
         self.assertFalse(hasattr(d, "bottom_mode"))
@@ -351,19 +355,19 @@ class DockTests(unittest.TestCase):
         self.assertIn("Ignore a table top more than", texts)
         # enabled states follow the line and the top source
         d.top_mode.setCurrentIndex(d.top_mode.findData("dem"))
-        self.assertFalse(d.top_field.isEnabled())
+        self.assertFalse(explo_row(d).top_field.isEnabled())
         self.assertFalse(d.top_max_diff.isEnabled())
-        self.assertTrue(d.depth_field.isEnabled())
+        self.assertTrue(explo_row(d).depth_field.isEnabled())
         # ... but the same limit checks a table bottom against top - depth when both fields are chosen
-        d.bottom_elev_field.setField("ExploDepth")
+        explo_row(d).bottom_elev_field.setField("ExploDepth")
         self.assertTrue(d.top_max_diff.isEnabled())
-        d.bottom_elev_field.setField("")
+        explo_row(d).bottom_elev_field.setField("")
         self.assertFalse(d.top_max_diff.isEnabled())
         d.top_mode.setCurrentIndex(d.top_mode.findData("field_then_dem"))
-        self.assertTrue(d.top_field.isEnabled() and d.top_max_diff.isEnabled())
+        self.assertTrue(explo_row(d).top_field.isEnabled() and d.top_max_diff.isEnabled())
         d.depth_line.setChecked(False)
-        for w in (d.top_mode, d.top_field, d.bottom_elev_field, d.depth_field, d.zero_missing, d.td_label,
-                  d.top_max_diff):
+        for w in (d.top_mode, explo_row(d).top_field, explo_row(d).bottom_elev_field, explo_row(d).depth_field,
+                  d.zero_missing, d.td_label, d.top_max_diff):
             self.assertFalse(w.isEnabled())
         self.assertFalse(d.settings().depth_line)
         d.depth_line.setChecked(True)
@@ -375,13 +379,13 @@ class DockTests(unittest.TestCase):
         d = XSectionsDock(self.iface, None)
         try:
             d.restore_from_project()
-            self.assertEqual((d.bottom_elev_field.currentField(), d.depth_field.currentField()),
+            self.assertEqual((explo_row(d).bottom_elev_field.currentField(), explo_row(d).depth_field.currentField()),
                              ("BotElev", "ExploDepth"))                  # guessed from the names
             s = default_settings(prj, dem, pts, lines, bottom_elev_field="BotElev", depth_field="",
                                  top_mode="field", td_label=False, top_max_diff_ft=12.5)
             d.apply_settings(s)
-            self.assertEqual(d.settings(), s)
-            self.assertEqual(d.depth_field.currentField(), "")          # "none" is kept, not re-guessed
+            self.assertEqual(d.settings(), as_rows(s))
+            self.assertEqual(explo_row(d).depth_field.currentField(), "")   # "none" is kept, not re-guessed
             d.refresh()                                                  # the real pipeline
             self.assertEqual(d.last_error, "")
             by = {h.label: h for h in d.model.hits}
@@ -417,27 +421,28 @@ class DockTests(unittest.TestCase):
                "bottom_field": "ExploDepth", "tolerance_ft": 90.0, "old_key": 3}
         import json
         s = Settings.from_json(json.dumps(old))
-        self.assertEqual((s.depth_field, s.bottom_elev_field, s.version, s.tolerance_ft),
-                         ("ExploDepth", "", SETTINGS_VERSION, 90.0))
+        self.assertEqual((layer_rows(s)[0]["depth_field"], layer_rows(s)[0]["bottom_elev_field"], s.version,
+                          s.tolerance_ft), ("ExploDepth", "", SETTINGS_VERSION, 90.0))
         self.assertFalse(hasattr(s, "bottom_mode"))
         s = Settings.from_json(json.dumps({**old, "bottom_mode": "elevation", "bottom_field": "BotElev"}))
-        self.assertEqual((s.depth_field, s.bottom_elev_field), ("", "BotElev"))
+        self.assertEqual((layer_rows(s)[0]["depth_field"], layer_rows(s)[0]["bottom_elev_field"]), ("", "BotElev"))
         s = Settings.from_json(json.dumps({**old, "bottom_field": ""}))
-        self.assertEqual((s.depth_field, s.bottom_elev_field), ("", ""))
+        self.assertEqual((layer_rows(s)[0]["depth_field"], layer_rows(s)[0]["bottom_elev_field"]), ("", ""))
         self.assertTrue(s.td_label)
         # through the project store and the panel
         self.prj.writeEntry(settings_store.SCOPE, settings_store.KEY, json.dumps(old))
         loaded = settings_store.load(self.prj)
-        self.assertEqual((loaded.depth_field, loaded.bottom_elev_field, loaded.tolerance_ft), ("ExploDepth", "", 90.0))
+        self.assertEqual((layer_rows(loaded)[0]["depth_field"], layer_rows(loaded)[0]["bottom_elev_field"],
+                          loaded.tolerance_ft), ("ExploDepth", "", 90.0))
         self.dock.restore_from_project()
-        self.assertEqual(self.dock.depth_field.currentField(), "ExploDepth")
-        self.assertEqual(self.dock.bottom_elev_field.currentField(), "")
+        self.assertEqual(explo_row(self.dock).depth_field.currentField(), "ExploDepth")
+        self.assertEqual(explo_row(self.dock).bottom_elev_field.currentField(), "")
         self.assertEqual(self.dock.tolerance.value(), 90.0)
         self.prj.writeEntry(settings_store.SCOPE, settings_store.KEY,
                             json.dumps({**old, "bottom_mode": "elevation", "bottom_field": "ExploDepth"}))
         self.dock.restore_from_project()
-        self.assertEqual((self.dock.bottom_elev_field.currentField(), self.dock.depth_field.currentField()),
-                         ("ExploDepth", ""))
+        self.assertEqual((explo_row(self.dock).bottom_elev_field.currentField(),
+                          explo_row(self.dock).depth_field.currentField()), ("ExploDepth", ""))
 
     def test_earlier_versions_keep_their_layout(self):
         """Version 3 (0.1.1) stores every layout option: its project keeps its look in the panel, also when saved
@@ -456,7 +461,7 @@ class DockTests(unittest.TestCase):
         self.assertTrue(d.save_settings())                                  # rewritten as version 4 ...
         saved = settings_store.load(self.prj)
         self.assertEqual((saved.version, saved.compact_layout, saved.fill_grid), (SETTINGS_VERSION, False, "off"))
-        self.assertEqual(saved, Settings(**{k: v for k, v in v3.items() if k != "version"}))   # ... unchanged
+        self.assertEqual(saved, Settings.from_json(json.dumps(v3)))                          # ... unchanged
         since_v3 = ("compact_layout", "edge_margin_in", "show_notes", "fill_grid", "show_bends")
         for version, fill_below in ((2, False), (2, True), (1, None)):       # as 0.1.0 saved them; no fill key
             old = {k: v for k, v in v3.items() if k not in since_v3}
@@ -478,11 +483,9 @@ class DockTests(unittest.TestCase):
         d = self.dock
         pv = PreviewWidget()
         d.preview = pv
-        self.assertEqual(d.points_layer.itemText(0), "(none: ground line only)")
-        d.points_layer.setLayer(None)
-        d._on_points_activated()                        # what choosing "(none)" in the box does
+        d.remove_explo_row(explo_row(d))                # what Remove in the row's menu does
         s = d.settings()
-        self.assertEqual(s.points_layer_id, "")
+        self.assertEqual(layer_rows(s), [])
         d.refresh()                                     # the real pipeline
         self.assertEqual(d.last_error, "")
         m = d.model
@@ -507,13 +510,13 @@ class DockTests(unittest.TestCase):
         # the choice sticks: a point layer added later is not picked up by itself
         from tests.fixtures import make_points_layer
         self.prj.addMapLayer(make_points_layer(name="more_wells"))
-        self.assertIsNone(d.points_layer.currentLayer())
-        self.assertEqual(d.settings().points_layer_id, "")
+        self.assertEqual(d.explo_rows, [])
+        self.assertEqual(layer_rows(d.settings()), [])
         d.save_settings()
         other = XSectionsDock(self.iface, None)
         try:
             other.restore_from_project()
-            self.assertIsNone(other.points_layer.currentLayer())
+            self.assertEqual(other.explo_rows, [])
         finally:
             other.cleanup()
             other.deleteLater()
@@ -527,7 +530,7 @@ class DockTests(unittest.TestCase):
         other = make_points_layer(name="Other wells")
         self.prj.addMapLayer(other)
         APP.processEvents()
-        self.assertIs(d.points_layer.currentLayer(), self.pts)
+        self.assertIs(explo_row(d).layer_combo.currentLayer(), self.pts)
         d.refresh()
         self.assertEqual(d.last_error, "")
         pid = self.pts.id()
@@ -537,28 +540,27 @@ class DockTests(unittest.TestCase):
         self.assertIsNone(d.model)
         self.assertIn("no longer in the project", d.last_error)
         self.assertIn("no longer in the project", d.message.text())
-        self.assertIsNone(d.points_layer.currentLayer())             # not quietly moved to "Other wells"
-        self.assertEqual(d.settings().points_layer_id, pid)
+        self.assertIsNone(explo_row(d).layer_combo.currentLayer())   # not quietly moved to "Other wells"
+        self.assertTrue(explo_row(d).name_label.isWarn())            # the row stays, amber
+        self.assertEqual(layer_rows(d.settings())[0]["layer_id"], pid)
         d.save_settings()
-        self.assertEqual(settings_store.load(self.prj).points_layer_id, pid)    # the next load says so too
+        self.assertEqual(layer_rows(settings_store.load(self.prj))[0]["layer_id"], pid)   # the next load says so too
         again = XSectionsDock(self.iface, None)
         try:
             again.restore_from_project()
-            self.assertIsNone(again.points_layer.currentLayer())
+            self.assertIsNone(explo_row(again).layer_combo.currentLayer())
             again.refresh()
             self.assertIn("no longer in the project", again.last_error)
         finally:
             again.cleanup()
             again.deleteLater()
         # the user picks the other layer: explorations again
-        d.points_layer.setLayer(other)
-        d._on_points_activated()
+        explo_row(d).layer_combo.setLayer(other)
         d.refresh()
         self.assertEqual(d.last_error, "")
         self.assertTrue(d.model.has_explorations and d.model.hits)
         # ... or none: a ground line only
-        d.points_layer.setLayer(None)
-        d._on_points_activated()
+        explo_row(d).layer_combo.setLayer(None)
         d.refresh()
         self.assertEqual(d.last_error, "")
         self.assertFalse(d.model.has_explorations)
@@ -588,8 +590,8 @@ class DockTests(unittest.TestCase):
         self.assertIn("4.60 × 5.00 in", exp)
         self.assertIn("Letter 11 × 8.5 in", exp)
         self.assertIn("1.24 in of grid below the bottom of B-2", exp)
-        counts = {d.type_list.topLevelItem(i).text(0): d.type_list.topLevelItem(i).text(1)
-                  for i in range(d.type_list.topLevelItemCount())}
+        tl = explo_row(d).type_list
+        counts = {tl.topLevelItem(i).text(0): tl.topLevelItem(i).text(1) for i in range(tl.topLevelItemCount())}
         self.assertEqual(counts["Boring"], "1 / 6")
         self.assertEqual(counts["Monitoring Well"], "1 / 2")
         # only the note not already in a readout reaches the message line
@@ -1034,12 +1036,16 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(sheet_tags(5, [500.0, 30.0, 30.0, 30.0, 30.0]), ["1/5", "2/5", "3/5", "4/5", "5/5"])
 
     def test_toolbar_has_no_save_or_editors(self):
+        """0.3.1: matplotlib's toolbar is gone (its rectangle zoom distorted the vertical exaggeration). Fit, zoom
+        out / in (the whole plot), Surfaces CSV… and (0.3.2) the two hover toggles; no save, no editors, no points
+        CSV."""
         pv = PreviewWidget()
         names = [a.text() for a in pv.toolbar.actions() if a.text()]
-        for keep in ("Home", "Back", "Forward", "Pan", "Zoom"):
-            self.assertIn(keep, names)
-        for gone in ("Save", "Subplots", "Customize"):
+        self.assertEqual(names, ["Fit", "Zoom out", "Zoom in", "Surfaces CSV…", "Readout row", "Popup"])
+        for gone in ("Home", "Back", "Forward", "Pan", "Zoom", "Save", "Subplots", "Customize", "Points CSV…"):
             self.assertNotIn(gone, names)
+        self.assertEqual(pv.zoom_label.text(), "100%")
+        self.assertTrue(pv.act_strip.isCheckable() and pv.act_popup.isCheckable())
 
     def test_draw_and_failure(self):
         pv = PreviewWidget()
@@ -1165,7 +1171,7 @@ class PluginTests(unittest.TestCase):
             s = dock.settings()
             self.assertEqual((s.line_layer_id, s.line_fid), ("", None))
             self.assertEqual(s.dem_layer_id, rasters["Bare earth 2019"].id())
-            self.assertEqual(s.points_layer_id, self.pts.id())
+            self.assertEqual(layer_rows(s)[0]["layer_id"], self.pts.id())
             renamed = QgsVectorLayer(f"LineString?crs={CRS}", "XSec lines", "memory")
             prj.addMapLayer(renamed)
             dock.restore_from_project()
@@ -1186,22 +1192,22 @@ class PluginTests(unittest.TestCase):
         dock = XSectionsDock(self.iface, None)
         try:
             dock.restore_from_project()
-            self.assertIsNone(dock.label_field.layer())
+            self.assertEqual(dock.explo_rows, [])                   # no point layer yet: no row
             hydrants = QgsVectorLayer(f"Point?crs={CRS}", "Hydrants", "memory")
             pts = make_points_layer(name="CDF_wells")
             prj.addMapLayers([hydrants, pts])
-            self.assertEqual(dock.points_layer.currentLayer().id(), pts.id())
-            self.assertEqual((dock.label_field.currentField(), dock.type_field.currentField(),
-                              dock.top_field.currentField(), dock.depth_field.currentField()),
+            self.assertEqual(explo_row(dock).layer_combo.currentLayer().id(), pts.id())
+            self.assertEqual((explo_row(dock).label_field.currentField(), explo_row(dock).type_field.currentField(),
+                              explo_row(dock).top_field.currentField(), explo_row(dock).depth_field.currentField()),
                              ("ExploName", "ExploType", "ExploElev", "ExploDepth"))
-            self.assertEqual(dock.type_list.topLevelItemCount(), 4)
+            self.assertEqual(explo_row(dock).type_list.topLevelItemCount(), 4)
 
             dem = QgsRasterLayer(make_dem(), "cdf_lidar")
             lines = make_line_layer(name="xsec_lines")
             prj.addMapLayers([dem, lines])
             s = dock.settings()
-            self.assertEqual((s.dem_layer_id, s.line_layer_id, s.line_fid, s.points_layer_id, s.label_field),
-                             (dem.id(), lines.id(), 1, pts.id(), "ExploName"))
+            self.assertEqual((s.dem_layer_id, s.line_layer_id, s.line_fid, layer_rows(s)[0]["layer_id"],
+                              layer_rows(s)[0]["label_field"]), (dem.id(), lines.id(), 1, pts.id(), "ExploName"))
             self.assertFalse(dock._user_changed)          # guesses, not the user's choice: not saved
 
             prj.addMapLayers([QgsRasterLayer(make_dem(), "other_dem"), make_line_layer(name="section 2"),

@@ -6,10 +6,18 @@ Rules (DESIGN.md decisions 2 and 3):
 - each exploration on its own (top_and_bottom): the top comes from the table when it has a usable
   value close enough to LIDAR, else from LIDAR at the exploration's own x, y; the bottom comes from
   the table's bottom elevation when it is below the top (and agrees with top - depth), else top - depth.
+The selection (_project_points) is shared with the other points (core/others.py). Since 0.3.3 each exploration row
+calls find_explorations with its own view of the settings (model.layer_view); the rules stay shared.
+Numbers stored as text (0.3.5: a CSV opened by OGR has only text fields): to_number reads a text that is a plain
+number ("642.3", " 642 ", "-12.5", "1e3", "1,234.5"); any other text is no number, left out as NULL is, and flagged:
+per exploration for its own fields (not_number_flag), per table field for the water-level table (WlTable.warning).
+An empty text is no value, as NULL.
 """
 from __future__ import annotations
 
 import math
+import re
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
@@ -28,18 +36,59 @@ WL_ABOVE_FT = 100.0        # a water level more than this above the top is taken
 WL_BELOW_NO_BOTTOM_FT = 1000.0   # ... or more than this below the top, when the exploration has no bottom
 
 
+# a text that is a number (0.3.5): plain, or with US thousands separators; spaces around it are trimmed
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_US_NUMBER = re.compile(r"[+-]?[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]*)?")
+SHOWN_TEXT = 24            # characters of a text that is not a number shown in its flag
+
+
+def text_number(text: str) -> Optional[float]:
+    """A text as a number: "642.3", " 642 ", "-12.5", "1e3", "1,234.5" (US thousands separators); None for anything
+    else ("", "NA", "dry", "642.3 ft", "1.234,5", "nan")."""
+    t = text.strip()
+    if _PLAIN_NUMBER.fullmatch(t):
+        x = float(t)
+    elif _US_NUMBER.fullmatch(t):
+        x = float(t.replace(",", ""))
+    else:
+        return None
+    return x if math.isfinite(x) else None
+
+
 def to_number(value: Any) -> Optional[float]:
-    """Attribute value -> float, or None for NULL / empty / non-numeric / nan."""
+    """Attribute value -> float, or None for NULL / empty / non-numeric / nan. A text is read by text_number (0.3.5:
+    a CSV's numbers are text)."""
     if value is None:
         return None
     is_null = getattr(value, "isNull", None)
     if callable(is_null) and is_null():
         return None
+    if isinstance(value, str):
+        return text_number(value)
     try:
         x = float(value)
     except (TypeError, ValueError):
         return None
     return x if math.isfinite(x) else None
+
+
+def not_number_text(value: Any) -> str:
+    """The trimmed text of an attribute value that is a text but not a number ("NA", "dry", "642.3 ft"), else ""
+    (NULL, an empty text, a number, a text that is a number)."""
+    if not isinstance(value, str):
+        return ""
+    t = value.strip()
+    return t if t and text_number(t) is None else ""
+
+
+def _shown(text: str) -> str:
+    return text if len(text) <= SHOWN_TEXT else text[:SHOWN_TEXT - 1] + "…"
+
+
+def not_number_flag(field: str, text: str, then: str = "left out") -> str:
+    """The flag of a value left out because it is not a number: 'DTW “dry” is not a number: left out' (`then`: what
+    was done instead, e.g. an other point's "on the ground line")."""
+    return f"{field} “{_shown(text)}” is not a number: {then}"
 
 
 def _text(value: Any) -> str:
@@ -51,13 +100,26 @@ def _text(value: Any) -> str:
     return str(value)
 
 
-def date_text(value: Any) -> str:
-    """A date attribute as text: a date (or date and time) as M/D/YYYY, anything else as it is written."""
+def date_text(value: Any, epoch_ms: bool = False) -> str:
+    """A date attribute as text: a date (or date and time) as M/D/YYYY, anything else as it is written.
+
+    `epoch_ms` (a number field): a whole number of at least 1e9 is a date stored as milliseconds since 1970-01-01
+    (a GeoPackage written by ArcGIS stores dates so), read as a UTC calendar date; one before 1900 is the
+    1899-12-30 "no date" placeholder: "". Smaller numbers (20210202, a year) are written as they are."""
     if value is None:
         return ""
     is_null = getattr(value, "isNull", None)
     if callable(is_null) and is_null():
         return ""
+    if (epoch_ms and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and float(value).is_integer() and abs(value) >= 1e9):
+        try:
+            # (never datetime.fromtimestamp: local time, and it raises for dates before 1970 on Windows)
+            d = (datetime(1970, 1, 1) + timedelta(milliseconds=int(value))).date()
+        except OverflowError:
+            d = None
+        if d is not None:
+            return "" if d.year < 1900 else f"{d.month}/{d.day}/{d.year}"
     if callable(getattr(value, "date", None)) and callable(getattr(value, "time", None)):
         value = value.date()                              # QDateTime / datetime -> the date
     if all(callable(getattr(value, a, None)) for a in ("year", "month", "day")):        # QDate
@@ -90,24 +152,37 @@ def _attr_number(feature, i: int) -> Optional[float]:
     return to_number(feature.attribute(i)) if i >= 0 else None
 
 
-def _field_index(layer: QgsVectorLayer, name: str, what: str) -> int:
+def _field_index(layer: QgsVectorLayer, name: str, what: str, of: str = "") -> int:
+    """The index of the field `name` of `layer` (-1 for none); SectionError when the layer lacks it ("The `what` field
+    “name”`of` is not in ...")."""
     if not name:
         return -1
     i = layer.fields().lookupField(name)
     if i < 0:
-        raise SectionError(f"The {what} field “{name}” is not in {layer.name()}. Choose another field.")
+        raise SectionError(f"The {what} field “{name}”{of} is not in {layer.name()}. Choose another field.")
     return i
 
 
 def _type_filter(layer: QgsVectorLayer, type_i: int, types: List[str]) -> str:
+    """The filter expression for the ticked type values ("" = every feature). "" in `types` stands for the NULL or
+    empty value; [NO_TYPES] matches nothing."""
     if type_i < 0 or not types:
         return ""
     fld = layer.fields().at(type_i)
-    quoted = []
-    for v in types:
-        num = to_number(v) if fld.isNumeric() else None
-        quoted.append(repr(num) if num is not None else QgsExpression.quotedValue(str(v)))
-    return f"{QgsExpression.quotedColumnRef(fld.name())} IN ({', '.join(quoted)})"
+    col = QgsExpression.quotedColumnRef(fld.name())
+    vals = [v for v in types if v != ""]
+    parts = []
+    if vals:
+        quoted = []
+        for v in vals:
+            num = to_number(v) if fld.isNumeric() else None
+            quoted.append(repr(num) if num is not None else QgsExpression.quotedValue(str(v)))
+        parts.append(f"{col} IN ({', '.join(quoted)})")
+    if "" in types:
+        parts.append(f"{col} IS NULL")
+        if not fld.isNumeric():
+            parts.append(f"{col} = ''")
+    return " OR ".join(parts)
 
 
 class TopBottom(NamedTuple):
@@ -349,65 +424,86 @@ def atd_kind(value: Any, settings: Settings) -> str:
 WlRows = Dict[str, List[Tuple[Optional[float], str, str, str]]]
 
 
-def read_wl_table(settings: Settings, project: QgsProject) -> WlRows:
-    """The water-level table as {name_key: [(elevation, kind, date, "table"), ...]}. SectionError when the table
-    or one of its fields is gone."""
+class WlTable(dict):
+    """read_wl_table's rows (a WlRows dict) and, since 0.3.5, how many of its levels are a text that is not a number
+    (`not_numbers`: left out, as NULL is) and the model warning that says so (`warning`, "" for none), e.g.
+    "Boring Summary: 3 water levels in GW Elev. (ft) are not numbers (left out)." """
+    not_numbers: int = 0
+    warning: str = ""
+
+
+def _not_numbers_warning(table: str, field: str, n: int) -> str:
+    if n == 1:
+        return f"{table}: 1 water level in {field} is not a number (left out)."
+    return f"{table}: {n:,} water levels in {field} are not numbers (left out)."
+
+
+def read_wl_table(settings: Settings, project: QgsProject) -> WlTable:
+    """The water-level table as {name_key: [(elevation, kind, date, "table"), ...]} (a WlTable: with the count and
+    the warning of its levels that are not numbers). SectionError when the table or one of its fields is gone."""
     layer = project.mapLayer(settings.wl_table_id) if settings.wl_table_id else None
     if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
-        raise SectionError("The water-level table is no longer in the project. Choose it again, or none.")
-    name_i = _field_index(layer, settings.wl_table_name_field, "water-level table name")
-    elev_i = _field_index(layer, settings.wl_table_elev_field, "water-level table elevation")
+        # (0.3.5: "table of water levels", never read as the water table; its name while QGIS still knows it)
+        known = f" ({layer.name()})" if layer is not None and layer.name() else ""
+        raise SectionError(f"The table of water levels{known} is no longer in the project. Choose it again, or none.")
+    of = " of the table of water levels"
+    name_i = _field_index(layer, settings.wl_table_name_field, "name", of)
+    elev_i = _field_index(layer, settings.wl_table_elev_field, "level", of)
     if name_i < 0 or elev_i < 0:
-        raise SectionError(f"Choose the name and elevation fields of the water-level table {layer.name()}.")
-    date_i = _field_index(layer, settings.wl_table_date_field, "water-level table date")
-    kind_i = _field_index(layer, settings.wl_table_kind_field, "water-level table kind")
+        raise SectionError(f"Choose the name and level fields of the table of water levels {layer.name()}.")
+    date_i = _field_index(layer, settings.wl_table_date_field, "date", of)
+    kind_i = _field_index(layer, settings.wl_table_kind_field, "kind", of)
     attrs = [i for i in (name_i, elev_i, date_i, kind_i) if i >= 0]
     req = QgsFeatureRequest().setFlags(Qgis.FeatureRequestFlag.NoGeometry).setSubsetOfAttributes(attrs)
-    rows: WlRows = {}
+    date_ms = date_i >= 0 and layer.fields().at(date_i).isNumeric()
+    rows = WlTable()
+    bad = 0
     for f in layer.getFeatures(req):
         key = name_key(f.attribute(name_i))
         if not key:
             continue
         kind = atd_kind(f.attribute(kind_i) if kind_i >= 0 else None, settings)
-        date = date_text(f.attribute(date_i)) if date_i >= 0 else ""
-        rows.setdefault(key, []).append((to_number(f.attribute(elev_i)), kind, date, "table"))
+        date = date_text(f.attribute(date_i), epoch_ms=date_ms) if date_i >= 0 else ""
+        value = f.attribute(elev_i)
+        if not_number_text(value):
+            bad += 1
+        rows.setdefault(key, []).append((to_number(value), kind, date, "table"))
+    if bad:
+        rows.not_numbers = bad
+        rows.warning = _not_numbers_warning(layer.name(), settings.wl_table_elev_field, bad)
     return rows
 
 
-def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings: Settings,
-                      crs: QgsCoordinateReferenceSystem, sampler: Callable[[np.ndarray, np.ndarray], np.ndarray],
-                      dist_factor: float, project: QgsProject, ground: Optional[GroundProfile] = None,
-                      wl_table: Optional[WlRows] = None) -> Tuple[List[Hit], List[str], int]:
-    """(hits sorted by station, beyond_ends labels, near_count).
+class _Cand(NamedTuple):
+    """A point within the tolerance of the line, between its ends (_project_points)."""
+    feature: Any
+    point: Any                         # QgsPointXY, section CRS
+    foot: Any                          # the nearest point on the line
+    station: float                     # ft
+    offset: float                      # ft
+    left: float                        # closestSegmentWithContext's side (> 0: right of the line)
+    label: str                         # the label field's value, "#<fid>" when blank
 
-    `wl_table` (read_wl_table) adds water levels by exploration name (the label field's value).
 
-    `ground` (optional) is the profile already sampled along `line`; it gives ground_at_station
-    (so ticks sit on the drawn ground line) and the nearest valid ground in a gap. Without it a
-    coarse profile is sampled here.
-    """
-    if points_layer is None or not isinstance(points_layer, QgsVectorLayer) or not points_layer.isValid():
-        raise SectionError("Choose an explorations (points) layer.")
-    if points_layer.geometryType() != Qgis.GeometryType.Point:
-        raise SectionError(f"{points_layer.name()} is not a point layer. Choose the explorations points layer.")
-    tol = float(settings.tolerance_ft)
+def _project_points(line: QgsGeometry, layer: QgsVectorLayer, label_field: str, type_field: str, types: List[str],
+                    tol: float, crs: QgsCoordinateReferenceSystem, dist_factor: float, project: QgsProject,
+                    what: str = "explorations (points)") -> Tuple[List[_Cand], List[str], int, int]:
+    """The one selection rule of explorations and other points (decisions 3 and 7): the points of the ticked types
+    within `tol` ft of the line, projected perpendicularly onto it, with flat end caps (a point past an end is left
+    out, its label listed in the second value when within the tolerance); the third value counts the points within
+    NEAR_FACTOR x tol but further than tol. Returns (candidates in feature order, beyond labels, near count, the
+    type field's index or -1). Only features in the line's box (buffered) are read: the layer's spatial index."""
+    if layer is None or not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+        raise SectionError(f"Choose an {what} layer.")
+    if layer.geometryType() != Qgis.GeometryType.Point:
+        raise SectionError(f"{layer.name()} is not a point layer. Choose the {what.split(' (')[0]} points layer.")
+    tol = float(tol)
     if not tol > 0:
         raise SectionError("The projection tolerance must be more than 0 ft.")
     near = NEAR_FACTOR * tol
     slack = 1e-9 * max(1.0, tol)
-
-    label_i = _field_index(points_layer, settings.label_field, "label")
-    type_i = _field_index(points_layer, settings.type_field, "type")
-    top_i = _field_index(points_layer, settings.top_field, "top elevation") if settings.top_mode != "dem" else -1
-    bot_i = _field_index(points_layer, settings.bottom_elev_field, "bottom elevation")
-    dep_i = _field_index(points_layer, settings.depth_field, "total depth")
-    scr = bool(settings.screens)
-    sa_i = _field_index(points_layer, settings.screen_top_field, "screen top") if scr else -1
-    sb_i = _field_index(points_layer, settings.screen_bottom_field, "screen bottom") if scr else -1
-    wl_i = _field_index(points_layer, settings.wl_field, "water level") if scr else -1
-    wld_i = _field_index(points_layer, settings.wl_date_field, "water level date") if scr else -1
-    atd_i = _field_index(points_layer, settings.atd_field, "ATD water level") if scr else -1
-    atdd_i = _field_index(points_layer, settings.atd_date_field, "ATD water level date") if scr else -1
+    label_i = _field_index(layer, label_field, "label")
+    type_i = _field_index(layer, type_field, "type")
 
     verts = line_vertices(line)
     seg_len = np.hypot(np.diff(verts[:, 0]), np.diff(verts[:, 1]))
@@ -417,14 +513,14 @@ def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings:
     req = QgsFeatureRequest()
     req.setDestinationCrs(crs, project.transformContext())
     req.setFilterRect(line.boundingBox().buffered(near / dist_factor))
-    expr = _type_filter(points_layer, type_i, settings.types)
+    expr = _type_filter(layer, type_i, types)
     if expr:
         req.setFilterExpression(expr)
 
-    cands = []            # (feature, point, foot, station_ft, offset_ft, leftOf, label)
+    cands: List[_Cand] = []
     beyond: List[str] = []
     near_count = 0
-    for f in points_layer.getFeatures(req):
+    for f in layer.getFeatures(req):
         g = f.geometry()
         if g is None or g.isNull() or g.isEmpty():
             continue
@@ -453,16 +549,56 @@ def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings:
             near_count += 1
             continue
         station_ft = (cum[seg] + math.hypot(foot.x() - ax, foot.y() - ay)) * dist_factor
-        cands.append((f, p, foot, station_ft, off_ft, left, label))
+        cands.append(_Cand(f, p, foot, station_ft, off_ft, left, label))
+    return cands, beyond, near_count, type_i
+
+
+def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings: Settings,
+                      crs: QgsCoordinateReferenceSystem, sampler: Callable[[np.ndarray, np.ndarray], np.ndarray],
+                      dist_factor: float, project: QgsProject, ground: Optional[GroundProfile] = None,
+                      wl_table: Optional[WlRows] = None) -> Tuple[List[Hit], List[str], int]:
+    """(hits sorted by station, beyond_ends labels, near_count).
+
+    `wl_table` (read_wl_table) adds water levels by exploration name (the label field's value).
+
+    `ground` (optional) is the profile already sampled along `line`; it gives ground_at_station
+    (so ticks sit on the drawn ground line) and the nearest valid ground in a gap. Without it a
+    coarse profile is sampled here.
+    """
+    cands, beyond, near_count, type_i = _project_points(line, points_layer, settings.label_field,
+                                                        settings.type_field, settings.types, settings.tolerance_ft,
+                                                        crs, dist_factor, project)
+    fields = points_layer.fields()
+    top_i = _field_index(points_layer, settings.top_field, "top elevation") if settings.top_mode != "dem" else -1
+    bot_i = _field_index(points_layer, settings.bottom_elev_field, "bottom elevation")
+    dep_i = _field_index(points_layer, settings.depth_field, "total depth")
+    scr = bool(settings.screens)
+    sa_i = _field_index(points_layer, settings.screen_top_field, "screen top") if scr else -1
+    sb_i = _field_index(points_layer, settings.screen_bottom_field, "screen bottom") if scr else -1
+    wl_i = _field_index(points_layer, settings.wl_field, "water level") if scr else -1
+    wld_i = _field_index(points_layer, settings.wl_date_field, "water level date") if scr else -1
+    atd_i = _field_index(points_layer, settings.atd_field, "ATD water level") if scr else -1
+    atdd_i = _field_index(points_layer, settings.atd_date_field, "ATD water level date") if scr else -1
+    wld_ms = wld_i >= 0 and fields.at(wld_i).isNumeric()      # dates stored as epoch milliseconds (date_text)
+    atdd_ms = atdd_i >= 0 and fields.at(atdd_i).isNumeric()
+    # the number boxes set to a text field (0.3.5, a CSV's): a value there that is not a number is flagged per hit
+    text_boxes: Dict[int, str] = {}
+    for i, name in ((top_i, settings.top_field), (bot_i, settings.bottom_elev_field), (dep_i, settings.depth_field),
+                    (sa_i, settings.screen_top_field), (sb_i, settings.screen_bottom_field), (wl_i, settings.wl_field),
+                    (atd_i, settings.atd_field)):
+        if i >= 0 and not fields.at(i).isNumeric():
+            text_boxes.setdefault(i, name)
 
     if ground is None and cands:
+        verts = line_vertices(line)
+        cum = np.cumsum(np.hypot(np.diff(verts[:, 0]), np.diff(verts[:, 1])))
         length_ft = float(cum[-1]) * dist_factor
         ground = ground_profile(line, sampler, max(length_ft / 5000.0, 1.0), dist_factor)
 
     hits: List[Hit] = []
     if cands:
-        xs = np.array([c[1].x() for c in cands])
-        ys = np.array([c[1].y() for c in cands])
+        xs = np.array([c.point.x() for c in cands])
+        ys = np.array([c.point.y() for c in cands])
         at_point = np.asarray(sampler(xs, ys), dtype=float)
         for (f, p, foot, station, off, left, label), zp in zip(cands, at_point):
             zp = float(zp) if math.isfinite(zp) else math.nan
@@ -472,7 +608,13 @@ def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings:
             if in_gap:
                 gs = ground.nearest_valid(station)
                 flags.append("station in a DEM gap")
-            dx, dy = p.x() - foot.x(), p.y() - foot.y()
+            for i, name in text_boxes.items():
+                text = not_number_text(f.attribute(i))
+                if text:
+                    flags.append(not_number_flag(name, text))
+            # (0.3.5) the direction of projection: from the exploration onto the line (foot - point), so a well
+            # north of an east-west line reads "S"
+            dx, dy = foot.x() - p.x(), foot.y() - p.y()
             direction = compass_point(azimuth_deg(dx, dy), 8) if off > 1e-6 else ""
             tb = top_and_bottom(_attr_number(f, top_i), zp, _attr_number(f, bot_i), _attr_number(f, dep_i),
                                 settings)
@@ -481,10 +623,11 @@ def find_explorations(line: QgsGeometry, points_layer: QgsVectorLayer, settings:
                 levels = []
                 if wl_i >= 0:
                     levels.append((_attr_number(f, wl_i), "measured",
-                                   date_text(f.attribute(wld_i)) if wld_i >= 0 else "", settings.wl_field))
+                                   date_text(f.attribute(wld_i), wld_ms) if wld_i >= 0 else "", settings.wl_field))
                 if atd_i >= 0:
                     levels.append((_attr_number(f, atd_i), "atd",
-                                   date_text(f.attribute(atdd_i)) if atdd_i >= 0 else "", settings.atd_field))
+                                   date_text(f.attribute(atdd_i), atdd_ms) if atdd_i >= 0 else "",
+                                   settings.atd_field))
                 if wl_table:
                     levels += wl_table.get(name_key(label), [])
                 sl = screen_and_levels(tb.top, tb.bottom, _attr_number(f, sa_i), _attr_number(f, sb_i), levels,

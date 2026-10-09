@@ -1,0 +1,10 @@
+{
+ "warnings": [
+  "No explorations layer: ground line only.",
+  "No DEM data along 2.7% of the line (1 gap)."
+ ],
+ "beyond_ends": [],
+ "near_count": 0,
+ "has_explorations": false,
+ "points_name": ""
+}

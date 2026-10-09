@@ -1,0 +1,11 @@
+{
+ "warnings": [
+  "No DEM data along 2.7% of the line (1 gap).",
+  "W-2: screen top given without the bottom: no screen",
+  "W-3: water level 20 ft is below the bottom (521 ft): left out (water levels are read as elevations)"
+ ],
+ "beyond_ends": [],
+ "near_count": 0,
+ "has_explorations": true,
+ "points_name": "wells"
+}

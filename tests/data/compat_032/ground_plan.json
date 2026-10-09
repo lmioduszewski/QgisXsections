@@ -1,0 +1,46 @@
+{
+ "z_min": 480.0,
+ "z_max": 600.0,
+ "plot_length": 4600.0,
+ "h_major": 200.0,
+ "h_minor": 20.0,
+ "v_major": 20.0,
+ "v_minor": 2.0,
+ "pages": [
+  {
+   "page_w": 17.0,
+   "page_h": 11.0,
+   "sheet_name": "Tabloid 17 \u00d7 11 in, landscape",
+   "plot_left": 1.5,
+   "plot_bottom": 3.05,
+   "plot_w": 14.0,
+   "plot_h": 6.0,
+   "x_min": 0.0,
+   "x_max": 2800.0,
+   "tile_index": 1,
+   "tile_count": 2,
+   "match_left": null,
+   "match_right": 2600.0
+  },
+  {
+   "page_w": 17.0,
+   "page_h": 11.0,
+   "sheet_name": "Tabloid 17 \u00d7 11 in, landscape",
+   "plot_left": 1.5,
+   "plot_bottom": 3.05,
+   "plot_w": 11.0,
+   "plot_h": 6.0,
+   "x_min": 2400.0,
+   "x_max": 4600.0,
+   "tile_index": 2,
+   "tile_count": 2,
+   "match_left": 2600.0,
+   "match_right": null
+  }
+ ],
+ "fits": true,
+ "message": "Too long for one Tabloid sheet: tiled on 2 sheets (Tabloid 17 \u00d7 11 in, landscape), match lines at STA 26+00.",
+ "lowest_z": 514.999998304579,
+ "lowest_what": "the ground at 0 ft",
+ "warnings": []
+}
