@@ -6,7 +6,8 @@ resolved back to absolute paths when loaded (the settings in memory always hold 
 with its project and model runs keeps the model surfaces. A project not saved yet stores absolute paths; the dock
 stores the settings again while the project is written (Save As), relative to its new place.
 
-Per-user conveniences that do not belong to a project (last export folder) go to QgsSettings.
+Per-user conveniences that do not belong to a project (the last export folder, and from 0.3.6 the ⋯ menu's Verbose
+switch, "xsections/verbose": widgets.verbose) go to QgsSettings.
 """
 from __future__ import annotations
 

@@ -13,6 +13,8 @@ import re
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..render.symbols import SHAPE_KEYS, usual_color
+
 SETTINGS_VERSION = 7                     # 7 (0.3.4): colours from the layer style, depth widths, grid styling
 NO_POINTS = "No explorations layer: ground line only."   # model warning for a ground-only section
 NO_TYPES = "(no types selected)"         # a `types` list of only this matches nothing (an empty list = all values)
@@ -47,11 +49,20 @@ WL_KINDS = ("measured", "atd")           # open triangle joined to the screen | 
 POINT_LOOKS = ("black", "gray", "color")  # black (as always) | gray | color: each exploration in its colour in the
                                           # layer's own QGIS style
 LOOK_GRAY = "#8a8a8a"                    # the Gray look (lines, ticks, labels, TD) and its panel swatch
-OTHER_SHAPES = ("asterisk", "circle", "square", "diamond", "star", "triangle")
+OTHER_SHAPES = SHAPE_KEYS                # every key a row may hold: render/symbols.py's catalogue and the legacy star
 OTHER_ELEV = ("line", "lidar", "field")  # Ground line | LIDAR at the point | From a field
 OTHER_EMPTY = ("line", "lidar", "off")   # where the field is empty: on the ground line | LIDAR | left out
 OTHER_SIZE_MIN, OTHER_SIZE_MAX = 3.0, 20.0
 OTHER_COLOR_DEFAULT = "#1f6fb2"          # the bold blue asterisk of a seep
+# --- Other features (0.3.6): an other-points row may be a point, line or polygon layer
+FEATURE_KINDS = ("point", "line", "polygon")     # an Other features row's layer geometry
+AREA_PLACES = ("inside", "above")                # a polygon row's brackets: inside the frame (above the ground and
+                                                 # the labels in its span) | above the frame (a band over it)
+AREA_EDGES = ("off", "ground", "full")           # dashed lines at each piece's ends: none | to the ground | to the
+                                                 # frame bottom
+AREA_STYLES = ("solid", "dash")                  # the bracket line
+AREA_COLOR_DEFAULT = "#7a4fb0"                   # a new polygon row's colour (the mockup's project site)
+DEFAULT_SHAPE = {"point": "asterisk", "line": "stream", "polygon": "asterisk"}   # an unknown shape becomes this
 # a point layer's QGIS style as XSections reads it (LayerStyle.kind, core/symbology.py)
 STYLE_KINDS = ("single", "categorized", "graduated", "rule", "other", "none")
 
@@ -87,7 +98,12 @@ POINT_LAYER_DEFAULTS: Dict[str, Any] = dict(
     wl_values="elevation",  # one of WL_VALUES
     wl_field="", wl_date_field="", atd_field="", atd_date_field="",
     wl_table_id="", wl_table_name_field="", wl_table_elev_field="", wl_table_date_field="", wl_table_kind_field="",
-    wl_atd_values=[])       # [] automatic ("contains ATD"), [NO_ATD] none
+    wl_atd_values=[],       # [] automatic ("contains ATD"), [NO_ATD] none
+    guessed=[])             # 0.3.6: the fields guessed from their names that he has not checked yet (the row's "check"
+                            # badge); "Looks right" or his own choice clears them. GUESS_KEYS members, in that order
+# the field keys of an exploration row that may be guessed from the field names (a row's `guessed`), in row order
+GUESS_KEYS = ("label_field", "type_field", "top_field", "bottom_elev_field", "depth_field", "screen_top_field",
+              "screen_bottom_field", "wl_field", "wl_date_field", "atd_field", "atd_date_field")
 
 # The flat per-layer Settings keys (the single-layer shorthand, used only while point_layers is empty) -> row keys
 FLAT_LAYER_KEYS: Dict[str, str] = {
@@ -104,12 +120,18 @@ OTHER_POINT_DEFAULTS: Dict[str, Any] = dict(
     label_field="",
     type_field="",          # "" = every point
     types=[],               # as for explorations
-    shape="asterisk",       # one of OTHER_SHAPES
+    shape="asterisk",       # one of OTHER_SHAPES (render/symbols.py)
     color=OTHER_COLOR_DEFAULT,
     size=7.0,               # pt, OTHER_SIZE_MIN to OTHER_SIZE_MAX
     elev="line",            # one of OTHER_ELEV
     elev_field="",          # numeric field (ft) for elev "field"
-    elev_empty="line")      # one of OTHER_EMPTY
+    elev_empty="line",      # one of OTHER_EMPTY
+    # 0.3.6: line and polygon layers (Other features). A line row uses the keys above (its symbol where the section
+    # line crosses a line); a polygon row its label and type fields, color and these.
+    kind="point",           # one of FEATURE_KINDS: the row's layer geometry as last seen (the build reads the layer's)
+    bracket="inside",       # polygons: one of AREA_PLACES
+    bracket_style="solid",  # polygons: one of AREA_STYLES
+    edges="off")            # polygons: one of AREA_EDGES
 
 
 _MF6_TIME = re.compile(r"([1-9][0-9]*)(?:,([0-9]+))?")   # "kper" or "kper,kstp" ("kper,0" = "kper"); or "last"
@@ -189,7 +211,8 @@ def clean_surfaces(value: object) -> List[dict]:
 def clean_point_layer(d: object) -> Optional[dict]:
     """One stored exploration row (a dict) with every key of POINT_LAYER_DEFAULTS, in that order, each of the right
     kind; None if `d` is not a dict. Unknown keys are dropped (a 0.3.3 row's picked `color` too: a Color row takes its
-    colours from the layer style); wrong kinds and unknown choices take the default."""
+    colours from the layer style); wrong kinds and unknown choices take the default. `guessed` (0.3.6) keeps only
+    GUESS_KEYS, each once, in GUESS_KEYS order."""
     if not isinstance(d, dict):
         return None
     out = _clean_keys(d, POINT_LAYER_DEFAULTS)
@@ -199,6 +222,7 @@ def clean_point_layer(d: object) -> Optional[dict]:
         out["screen_values"] = "depth"
     if out["wl_values"] not in WL_VALUES:
         out["wl_values"] = "elevation"
+    out["guessed"] = [k for k in GUESS_KEYS if k in out["guessed"]]
     return out
 
 
@@ -212,11 +236,17 @@ def clean_point_layers(value: object) -> List[dict]:
 def clean_other_point(d: object) -> Optional[dict]:
     """One stored other-points row with every key of OTHER_POINT_DEFAULTS, in that order (None if not a dict):
     unknown choices and bad colours take the default, the size is clamped to OTHER_SIZE_MIN..OTHER_SIZE_MAX pt (not
-    a number: 7 pt)."""
+    a number: 7 pt). The kind is cleaned first (unknown: "point"); an unknown shape becomes its kind's DEFAULT_SHAPE
+    (0.3.6: a row of 0.3.5 loads as a point row, its four new keys at their defaults)."""
     if not isinstance(d, dict):
         return None
     out = _clean_keys(d, OTHER_POINT_DEFAULTS)
-    for key, choices in (("shape", OTHER_SHAPES), ("elev", OTHER_ELEV), ("elev_empty", OTHER_EMPTY)):
+    if out["kind"] not in FEATURE_KINDS:
+        out["kind"] = "point"
+    if out["shape"] not in OTHER_SHAPES:
+        out["shape"] = DEFAULT_SHAPE[out["kind"]]
+    for key, choices in (("elev", OTHER_ELEV), ("elev_empty", OTHER_EMPTY), ("bracket", AREA_PLACES),
+                         ("bracket_style", AREA_STYLES), ("edges", AREA_EDGES)):
         if out[key] not in choices:
             out[key] = OTHER_POINT_DEFAULTS[key]
     out["color"] = _clean_color(out["color"], OTHER_COLOR_DEFAULT)
@@ -226,6 +256,19 @@ def clean_other_point(d: object) -> Optional[dict]:
     else:
         out["size"] = float(OTHER_POINT_DEFAULTS["size"])
     return out
+
+
+def feature_row(kind: str = "point", **kw) -> dict:
+    """A new, cleaned Other features row of `kind`: point: OTHER_POINT_DEFAULTS (the bold blue asterisk); line: the
+    stream crossing symbol in its usual colour (#1f6fb2); polygon: AREA_COLOR_DEFAULT, brackets inside the frame, no
+    edge lines, solid. `kw` set any key (layer_id ...)."""
+    kind = kind if kind in FEATURE_KINDS else "point"
+    base = dict(OTHER_POINT_DEFAULTS, kind=kind, shape=DEFAULT_SHAPE[kind])
+    if kind == "line":
+        base["color"] = usual_color(DEFAULT_SHAPE[kind])
+    elif kind == "polygon":
+        base["color"] = AREA_COLOR_DEFAULT
+    return clean_other_point(dict(base, **kw))
 
 
 def clean_other_points(value: object) -> List[dict]:
@@ -498,6 +541,11 @@ def migrate_settings(data: dict) -> dict:
     line styles) and the depth line widths take their defaults when absent (the Green grid, 0.75 pt for Black and
     Gray depth lines, 1.6 pt for Color), so an older project draws as before.
 
+    0.3.6 adds row keys to other_points (kind, bracket, bracket_style, edges) and new symbol keys; a stored row without
+    them takes their defaults (a point row, as before): no version step. It also adds `guessed` to the exploration
+    rows (the fields guessed from their names, not checked yet); a stored row without it loads with none (no "check"
+    badge), and 0.3.5 opening a 0.3.6 project drops it.
+
     Whatever the version, the stored sheet-style keys (the grid choice, the Custom grid's colours, widths and line
     styles, the depth line widths) are cleaned first (clean_sheet_style): a bad value is dropped (its default then
     applies) or clamped. The page orientation (0.3.5, no version step: a key older settings lack takes its default,
@@ -769,7 +817,7 @@ class OtherPoint:
     y: float
     station: float                     # ft
     offset: float                      # ft, >= 0
-    side: str                          # "L" | "R"
+    side: str                          # "L" | "R"; "" for a crossing
     direction: str                     # 8-point compass direction of projection onto the line, as Hit ("" on it)
     ground_at_station: float           # the ground line at the station (the nearest valid ground in a gap)
     ground_at_point: float             # LIDAR at the point itself (nan if none)
@@ -782,6 +830,8 @@ class OtherPoint:
     layer_index: int = 0               # index in model.other_layers
     layer_id: str = ""
     layer_name: str = ""               # the row's legend name
+    kind: str = "point"                # point | crossing (0.3.6: where the section line crosses a line of a line row:
+                                       # offset 0, side "", direction "")
 
 
 @dataclass
@@ -799,10 +849,30 @@ class OtherLayerInfo:
     elev_empty: str
     on: bool                           # ticked, with a usable point layer, and built
     row: dict
-    plotted: int = 0
+    plotted: int = 0                   # its points, crossings (a line row) or pieces (a polygon row) on the section
     near: int = 0
     beyond: List[str] = field(default_factory=list)
     no_elevation: List[str] = field(default_factory=list)   # left out: field empty and "Where it is empty" = Off
+    kind: str = "point"                # its layer's FEATURE_KINDS kind (the row's when the layer is gone)
+    bracket: str = "inside"            # polygon rows: the row's AREA_PLACES, AREA_STYLES and AREA_EDGES choices
+    bracket_style: str = "solid"
+    edges: str = "off"
+
+
+@dataclass
+class AreaPiece:
+    """One stretch of the section line inside a polygon of a polygon row (0.3.6): drawn as a bracket."""
+    fid: int
+    label: str                         # the label field's value, "" when blank or no field (the sheet writes the
+                                       # row's name)
+    type_value: str                    # "" without a type field, or for NULL
+    start: float                       # stations, ft: 0 <= start < end <= the line's length
+    end: float
+    open_start: bool = False           # the polygon goes on past A (A lies inside it): an open arrow, "(continues)"
+    open_end: bool = False             # ... past A′
+    layer_index: int = 0               # index in model.other_layers
+    layer_id: str = ""
+    layer_name: str = ""               # the row's legend name
 
 
 @dataclass
@@ -827,6 +897,7 @@ class SectionModel:
     other_points: List[OtherPoint] = field(default_factory=list)   # sorted by (station, layer_index, label)
     other_layers: List[OtherLayerInfo] = field(default_factory=list)  # one per other-points row
     line_key: str = ""                 # line_key(settings) it was built for
+    other_areas: List[AreaPiece] = field(default_factory=list)   # sorted by (start, layer_index, label)
 
     @property
     def bend_stations(self) -> List[float]:
@@ -872,3 +943,5 @@ class Plan:
     lowest_z: float = math.nan         # lowest plotted point, ft
     lowest_what: str = ""              # e.g. "the bottom of MW-4"
     warnings: List[str] = field(default_factory=list)   # e.g. a manual elevation range that cuts off data
+    above_in: float = 0.0              # paper inches of the band of brackets over the frame (0: none); every sheet
+                                       # of the plan has it

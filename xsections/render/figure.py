@@ -16,10 +16,12 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 import numpy as np
 import matplotlib
 from matplotlib import patheffects
+from matplotlib.colors import to_hex
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Polygon, Rectangle
+from matplotlib.text import Text
 from matplotlib.textpath import TextToPath
 from matplotlib.ticker import FuncFormatter, MultipleLocator, NullLocator
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
@@ -33,10 +35,16 @@ from .scales import (CLIP_ARROW_H_IN, CLIP_ARROW_HALF_IN, CLIP_ARROW_TIP_IN, CLI
                      GROUND_LW, LEGEND_SYMBOL_MAX_PT, PlacedPoint, asterisk_width_pt, frame_levels, frame_screen,
                      ground_top_fn, hit_in_range, mark_obstacles, td_page_layout,
                      other_centre_in, other_label_anchor, other_label_layout, other_symbol, runs_below,
-                     symbol_capsules, symbol_edge_pt, symbol_extent, symbol_half_pt, symbol_outline)
+                     symbol_capsules, symbol_edge_pt, symbol_extent, symbol_flip, symbol_half_pt, symbol_outline)
+# the symbol catalogue (0.3.6): the geometry of every symbol beyond 0.3.5's own six
+from .symbols import LEGACY_DRAWN, Dot, Fill, Letter, Ring, Stroke, glyph, glyph_bbox, resolve, symbol, tint
 from .scales import (BRACKET_DX_IN, BRACKET_GAP_IN, WL_DX_IN, LEADER_DX_IN, LEADER_LW, LEADER_STEP_IN, MARK_EVERY_IN,
                      MARK_FIRST_IN, MARK_H_IN, MARK_HALF_IN, SCREEN_LW, WL_LABEL_GAP_IN, WL_LABEL_PT, WL_LINE_HALF_IN,
                      WL_LW, WL_TRI_H_IN, WL_TRI_HALF_IN, LegendEntry, legend_entries)
+# the brackets of the polygon rows (0.3.6): scales.area_layout places them on the whole section
+from .scales import (AREA_ARROW_HALF_IN, AREA_ARROW_IN, AREA_DASH_PT, AREA_EDGE_DASH_PT, AREA_EDGE_LW,
+                     AREA_FRAME_GAP_IN, AREA_LABEL_GAP_IN, AREA_LW, AREA_PAD_IN, AREA_ROW_IN, AREA_TICK_IN, AreaFrame,
+                     AreaSpot, area_band_in, area_layout)
 from .scales import (AXIS_PAD_PT, AXIS_TICK_PT, AXIS_TITLE_PT, COL_GAP_IN, CROSSBAR_IN, END_DIR_PT, END_PT,
                      GROUND_CLEAR_IN, HBAR_DEPTH_IN, HBAR_H_IN, HBAR_LABEL_DY_IN, HBAR_LEN_IN, HBAR_NAME_DY_IN,
                      LABEL_PT, NOTES_MIN_W, NOTES_TOP_IN, NOTE_COMPACT_PT, NOTE_GAP_IN, NOTE_MIN_PT,
@@ -108,6 +116,13 @@ CLIP_GID, CLIP_TD_GID, CLIP_TD_HALO_GID = "xsections-below-frame", "xsections-td
 POINT_Z = 4.8
 OTHER_GID, OTHER_LEAD_GID = "xsections-other", "xsections-other-lead"
 OTHER_LABEL_GID, OTHER_LABEL_HALO_GID = "xsections-other-label", "xsections-other-label-halo"
+LEGEND_SYMBOL_GID = "xsections-legend-symbol"   # 0.3.6: a catalogue symbol's legend swatch (0.3.5's six keep no gid)
+# 0.3.6: the brackets of the polygon rows: over the ground, data lines, points and ticks, under the labels (6); their
+# edge lines over the grid and match lines, under the surfaces and data lines
+AREA_Z, AREA_EDGE_Z = 5.5, 2.6
+AREA_GID, AREA_EDGE_GID = "xsections-area", "xsections-area-edge"     # the line, ticks and arrows; the edge lines
+AREA_LABEL_GID, AREA_LABEL_HALO_GID = "xsections-area-label", "xsections-area-label-halo"
+LEGEND_AREA_GID = "xsections-legend-area"
 
 _T2P = TextToPath()
 
@@ -236,28 +251,51 @@ def _nice_mult(spacing_in: float, want_in: float) -> int:
 
 
 def _symbol_artists(shape: str, size: float, k: float, color: str, cx: float, cy: float, sx: float, sy: float,
-                    transform=None) -> list:
-    """The artists of an other-point symbol (scales.symbol_outline / symbol_capsules) centred on (cx, cy), its paper
-    inches scaled by (sx, sy) into the coordinates of `transform` (data: 1 / kx, 1 / kz; the figure's inches: 1, 1).
-    Filled shapes: the colour with a white edge, round joins; the circle an Ellipse; the asterisk one line of
-    NaN-separated strokes with round caps."""
+                    transform=None, flip: bool = False) -> list:
+    """The artists of an other-point symbol centred on its origin at (cx, cy), its paper inches scaled by (sx, sy)
+    into the coordinates of `transform` (data: 1 / kx, 1 / kz; the figure's inches: 1, 1). An unknown key draws
+    symbols.FALLBACK_KEY's (the circle). 0.3.5's six (symbols.LEGACY_DRAWN, scales.symbol_outline /
+    symbol_capsules; `flip` ignored): filled shapes the colour with a white edge, round joins; the circle an Ellipse;
+    the asterisk one line of NaN-separated strokes with round caps. Every other catalogue key: one artist per
+    primitive of symbols.glyph (mirrored with `flip`), in its drawing order."""
+    shape = resolve(shape)
     kw = {} if transform is None else {"transform": transform}
-    e = symbol_edge_pt(k)
-    if shape == "circle":
-        r = symbol_half_pt(size, k) / 72.0
-        return [Ellipse((cx, cy), width=2.0 * r * sx, height=2.0 * r * sy, fc=color, ec="white", lw=e,
-                        joinstyle="round", **kw)]
-    outline = symbol_outline(shape, size, k)
-    if outline:
-        return [Polygon([(cx + x * sx, cy + y * sy) for x, y in outline], closed=True, fc=color, ec="white", lw=e,
-                        joinstyle="round", **kw)]
-    xs: List[float] = []
-    ys: List[float] = []
-    for c in symbol_capsules(shape, size, k):
-        xs += [cx + c.ax * sx, cx + c.bx * sx, math.nan]
-        ys += [cy + c.ay * sy, cy + c.by * sy, math.nan]
-    return [Line2D(xs[:-1], ys[:-1], color=color, lw=asterisk_width_pt(size, k), solid_capstyle="round",
-                   solid_joinstyle="round", **kw)]
+    if shape in LEGACY_DRAWN:
+        e = symbol_edge_pt(k)
+        if shape == "circle":
+            r = symbol_half_pt(size, k) / 72.0
+            return [Ellipse((cx, cy), width=2.0 * r * sx, height=2.0 * r * sy, fc=color, ec="white", lw=e,
+                            joinstyle="round", **kw)]
+        outline = symbol_outline(shape, size, k)
+        if outline:
+            return [Polygon([(cx + x * sx, cy + y * sy) for x, y in outline], closed=True, fc=color, ec="white", lw=e,
+                            joinstyle="round", **kw)]
+        xs: List[float] = []
+        ys: List[float] = []
+        for c in symbol_capsules(shape, size, k):
+            xs += [cx + c.ax * sx, cx + c.bx * sx, math.nan]
+            ys += [cy + c.ay * sy, cy + c.by * sy, math.nan]
+        return [Line2D(xs[:-1], ys[:-1], color=color, lw=asterisk_width_pt(size, k), solid_capstyle="round",
+                       solid_joinstyle="round", **kw)]
+    out: list = []
+    for g in glyph(shape, size, k, flip):
+        if isinstance(g, Stroke):
+            out.append(Line2D([cx + x * sx for x in g.xs], [cy + y * sy for y in g.ys], color=color, lw=g.w * 72.0,
+                              solid_capstyle="round", solid_joinstyle="round", **kw))
+        elif isinstance(g, Ring):                      # white inside
+            out.append(Ellipse((cx + g.cx * sx, cy + g.cy * sy), width=2.0 * g.r * sx, height=2.0 * g.r * sy,
+                               fc="white", ec=color, lw=g.w * 72.0, **kw))
+        elif isinstance(g, Dot):
+            out.append(Ellipse((cx + g.cx * sx, cy + g.cy * sy), width=2.0 * g.r * sx, height=2.0 * g.r * sy,
+                               fc=color, ec="white" if g.edge else "none", lw=g.edge * 72.0, joinstyle="round", **kw))
+        elif isinstance(g, Fill):
+            face = color if g.face == "color" else "white" if g.face == "white" else tint(to_hex(color))
+            out.append(Polygon([(cx + x * sx, cy + y * sy) for x, y in g.pts], closed=True, fc=face,
+                               ec="white" if g.edge == "white" else color, lw=g.w * 72.0, joinstyle="round", **kw))
+        elif isinstance(g, Letter):
+            out.append(Text(cx + g.x * sx, cy + g.y * sy, g.text, fontsize=g.size_pt, ha=g.ha, va="baseline",
+                            color=color, fontfamily=FONT, **kw))
+    return out
 
 
 # ----------------------------------------------------------------------------- the drawing
@@ -325,6 +363,22 @@ class _PointMark(NamedTuple):
     above: float
     text: str                          # its label
     spot: Optional[LabelSpot]          # where the label goes (None without one)
+    flip: bool = False                 # drawn mirrored (a spring's tail pointing left, downhill: scales.symbol_flip)
+
+
+class _AreaMark(NamedTuple):
+    """The bracket of a polygon row's piece on one page (0.3.6; stations and elevations in data units)."""
+    spot: AreaSpot
+    color: str
+    dashed: bool                       # its row's bracket_style is "dash"
+    edges: str                         # its row's AREA_EDGES choice
+    a: float                           # the stations of the part on this page
+    b: float
+    y: float                           # the line's elevation (above the frame: over z1)
+    ends: List[Tuple[float, bool, float]]   # each true end on this page: (station, open: past A or A′, +1 for the
+    #                                         start, -1 for the end: the way its arm goes back from an open end)
+    label: Optional[Tuple[float, float, Box]]   # (centre station, bottom elevation, its box in paper inches from the
+    #                                             frame's lower left), None: left out on this page
 
 
 class _EndMark(NamedTuple):
@@ -344,7 +398,8 @@ class _Painter:
     """Draws the section into one axes; shared by the sheet and the preview."""
 
     def __init__(self, fig: Figure, ax, model: SectionModel, settings: Settings, plan: Plan,
-                 x0: float, x1: float, pt_scale: float = 1.0, preview: bool = False):
+                 x0: float, x1: float, pt_scale: float = 1.0, preview: bool = False,
+                 above_in: Optional[float] = None):
         self.fig, self.ax, self.model, self.s, self.plan = fig, ax, model, settings, plan
         self.x0, self.x1 = float(x0), float(x1)
         self.z0, self.z1 = float(plan.z_min), float(plan.z_max)
@@ -359,6 +414,11 @@ class _Painter:
         self.top_blend = blended_transform_factory(ax.transData, ax.transAxes)
         self._lay: Optional[_Layout] = None
         self._pts: Optional[List[_PointMark]] = None
+        self._areas: Optional[List[_AreaMark]] = None
+        # (0.3.6) the band of bracket rows over the frame, paper inches (the preview's marks shrink with k): the end
+        # letters, BEND labels and titles stand above it. The plan's; the preview passes its own (draw_preview)
+        band = float(getattr(plan, "above_in", 0.0) or 0.0) if above_in is None else float(above_in)
+        self.above = band * self.k
 
     def _look(self, h: Hit) -> Tuple[str, Any, float, str]:
         """(line colour, line style, line width, ink) of an exploration: Black (DATA at the black width, black ink),
@@ -523,6 +583,9 @@ class _Painter:
         ax, k = self.ax, self.k
         taken = [m.box for m in self.end_marks()]
         half_w, lo, hi = text_width_pt("BEND", 5.5 * k) / 144.0, 2 * k / 72.0, 7.5 * k / 72.0
+        dy = 2 * k
+        if self.above > 0.0:                               # over the band of bracket rows (0.3.6)
+            lo, hi, dy = lo + self.above, hi + self.above, dy + self.above * 72.0
         for b in self.model.bend_stations:
             if self.x0 < b < self.x1:
                 ax.add_line(Line2D([b, b], [self.z0, self.z1], color=BEND, lw=0.6, ls=(0, (4, 3)), zorder=1))
@@ -531,7 +594,7 @@ class _Painter:
                 if overlaps_any(taken, *box):
                     continue
                 taken.append(box)
-                ax.annotate("BEND", (b, 1.0), xycoords=self.top_blend, xytext=(0, 2 * k), textcoords="offset points",
+                ax.annotate("BEND", (b, 1.0), xycoords=self.top_blend, xytext=(0, dy), textcoords="offset points",
                             ha="center", va="bottom", fontsize=5.5 * k, color=BEND, annotation_clip=False)
 
     # --- explorations
@@ -820,20 +883,22 @@ class _Painter:
                 if not lo <= p.station <= hi:
                     continue
                 shape, size, color = other_symbol(self.model, p)
-                caps = symbol_capsules(shape, size, k)
+                flip = symbol_flip(self.model, p, s)
+                caps = symbol_capsules(shape, size, k, flip)
                 half_w, below, above = symbol_extent(caps)
-                y = other_centre_in(p, caps, self.model.ground, self._x_in, self._z_in, self.kx, k, thin=self.preview)
+                y = other_centre_in(p, caps, self.model.ground, self._x_in, self._z_in, self.kx, k, thin=self.preview,
+                                    rests=symbol(shape).rests)
                 if not _finite_num(y) or not -tol <= y <= frame_h + tol:
                     continue
                 text = display_label(p, s)
-                items.append((i, p, shape, size, color, self._x_in(p.station), y, half_w, below, above, text))
+                items.append((i, p, shape, size, color, self._x_in(p.station), y, half_w, below, above, text, flip))
             labelled = [it for it in items if it[10]]
             obstacles = (mark_obstacles(lay.marks, s.label_vertical)
                          + [(x - w / 2, x + w / 2, y - TD_TEXT_H_IN * k, y) for _, x, y, w, _ in lay.td]
                          + [t.box for t in lay.side_td]
                          # every point's symbol: no label covers (and its halo erases) a neighbour's (its own is
                          # always under its anchor)
-                         + [(x - hw, x + hw, y - b, y + a) for (_, _, _, _, _, x, y, hw, b, a, _) in items])
+                         + [(x - hw, x + hw, y - b, y + a) for (_, _, _, _, _, x, y, hw, b, a, _, _) in items])
             st, gz = self.model.ground.stations, self.model.ground.z
             i0 = max(bisect.bisect_left(st, self.x0) - 1, 0)
             i1 = min(bisect.bisect_right(st, self.x1) + 1, len(st))
@@ -843,8 +908,8 @@ class _Painter:
                                        self.ax_width_in(), obstacles,
                                        ground_top_fn(st[i0:i1], gz[i0:i1], self._x_in, self._z_in))
             spot_of = {it[0]: sp for it, sp in zip(labelled, spots)}
-            out = [_PointMark(i, p, shape, size, color, x, y, hw, b, a, text, spot_of.get(i))
-                   for i, p, shape, size, color, x, y, hw, b, a, text in items]
+            out = [_PointMark(i, p, shape, size, color, x, y, hw, b, a, text, spot_of.get(i), flip)
+                   for i, p, shape, size, color, x, y, hw, b, a, text, flip in items]
         self._pts = out
         return out
 
@@ -857,11 +922,14 @@ class _Painter:
         for m in self._points_layout():
             p = m.point
             zc = self.z0 + m.y / self.kz
-            for art in _symbol_artists(m.shape, m.size, k, m.color, p.station, zc, 1.0 / self.kx, 1.0 / self.kz):
+            for art in _symbol_artists(m.shape, m.size, k, m.color, p.station, zc, 1.0 / self.kx, 1.0 / self.kz,
+                                       flip=m.flip):
                 art.set_zorder(POINT_Z)
                 art.set_gid(OTHER_GID)
                 if isinstance(art, Line2D):
                     ax.add_line(art)
+                elif isinstance(art, Text):                  # the thermal spring's "T"
+                    ax.add_artist(art)
                 else:
                     ax.add_patch(art)
             g = p.ground_at_station
@@ -899,6 +967,157 @@ class _Painter:
         tick = TICK_TO_IN * self.k
         return any(sp.moved and _segment_in_box(x, b + tick, sp.x, sp.base, box)
                    for x, b, sp in zip(lay.x_in, lay.base_in, lay.spots))
+
+    # --- the brackets of the polygon rows (0.3.6)
+    def _area_frame(self) -> AreaFrame:
+        """The preview's own paper for scales.area_layout: its scale, its k (its labels are relatively larger than the
+        sheet's) and what it lays out itself: the exploration ticks and labels, the other points' symbols and labels."""
+        obstacles = list(mark_obstacles(self.layout().marks, self.s.label_vertical))
+        if getattr(self.model, "other_points", None):
+            for pm in self._points_layout():
+                obstacles.append((pm.x - pm.half_w, pm.x + pm.half_w, pm.y - pm.below, pm.y + pm.above))
+                if pm.spot is not None:
+                    obstacles.append(pm.spot.box)
+        return AreaFrame(self.kx * float(self.s.h_scale), self.k, self._z_in, lambda y: self.z0 + y / self.kz,
+                         obstacles)
+
+    def _areas_layout(self) -> List[_AreaMark]:
+        """The brackets on this page (worked out once: the match notes keep clear of them), from the layout of the
+        whole section (scales.area_layout, the frame top as its cap and its bottom as its floor; at sheet scale on a
+        sheet, at its own in the preview): each piece's part on this page, its line's height (inside: the layout's;
+        above the frame: its row of the band), its true ends here and its label (its own centre when on this page,
+        else the middle of the part here, moved in to stay inside the frame; a label so moved is left out where it
+        would overlap a bracket label on this page)."""
+        if self._areas is not None:
+            return self._areas
+        out: List[_AreaMark] = []
+        pieces = getattr(self.model, "other_areas", None) or []
+        spots: List[AreaSpot] = []
+        if pieces:
+            frame = self._area_frame() if self.preview else None
+            spots = area_layout(self.model, self.s, self.plan.plot_length, z_cap=self.z1, z_floor=self.z0, frame=frame)
+        if spots:
+            k = self.k
+            fz = k / self.kz
+            infos = getattr(self.model, "other_layers", None) or []
+            eps = 1e-6 * max(1.0, self.x1 - self.x0)
+            tol = 1e-9 * max(1.0, abs(self.z1 - self.z0))
+            frame_w = self.ax_width_in()
+            pad = AREA_PAD_IN * k
+            moved: List[bool] = []
+            for sp in sorted(spots, key=lambda sp: (sp.place, sp.level)):
+                p = pieces[sp.index]
+                a, b = max(p.start, self.x0), min(p.end, self.x1)
+                if b <= a:
+                    continue
+                if sp.place == "above":
+                    y = self.z1 + (AREA_FRAME_GAP_IN + sp.level * AREA_ROW_IN + AREA_TICK_IN) * fz
+                else:
+                    y = sp.line_z
+                    if not (math.isfinite(y) and self.z0 - tol <= y <= self.z1 + tol):
+                        continue                         # lowered under the frame bottom (the plan warns)
+                j = getattr(p, "layer_index", 0)
+                info = infos[j] if isinstance(j, int) and 0 <= j < len(infos) else None
+                ends = [(s, is_open, d) for s, is_open, d in ((p.start, p.open_start, 1.0), (p.end, p.open_end, -1.0))
+                        if self.x0 - eps <= s <= self.x1 + eps]
+                label = None
+                own = self.x0 - eps <= sp.label_x <= self.x1 + eps
+                if sp.text:
+                    w = text_width_pt(sp.text, LABEL_PT * k) / 72.0
+                    cx = clamp_centre(self._x_in(sp.label_x if own else (a + b) / 2.0), w, frame_w)
+                    bottom = self._z_in(y) + AREA_LABEL_GAP_IN * k
+                    label = (self.x0 + cx / self.kx, y + AREA_LABEL_GAP_IN * fz,
+                             (cx - w / 2.0, cx + w / 2.0, bottom, bottom + LABEL_ROW_IN * k))
+                out.append(_AreaMark(sp, info.color if info is not None else INK,
+                                     getattr(info, "bracket_style", "solid") == "dash",
+                                     getattr(info, "edges", "off") if info is not None else "off",
+                                     a, b, y, ends, label))
+                moved.append(label is not None and not own)
+            # every label at its own centre is drawn (the layout keeps those apart); one the tile rule moved (its
+            # centre on another sheet) is left out where it would overlap a bracket label already on this page
+            taken = [m.label[2] for m, mv in zip(out, moved) if m.label is not None and not mv]
+            taken = [(box[0] - pad / 2.0, box[1] + pad / 2.0, box[2], box[3]) for box in taken]
+            for i, (m, mv) in enumerate(zip(out, moved)):
+                if not mv:
+                    continue
+                box = m.label[2]
+                box = (box[0] - pad / 2.0, box[1] + pad / 2.0, box[2], box[3])
+                if overlaps_any(taken, *box):
+                    out[i] = m._replace(label=None)
+                else:
+                    taken.append(box)
+        self._areas = out
+        return out
+
+    def areas(self) -> None:
+        """The brackets of the polygon rows: a line over each piece's part on this page with a tick at each true end
+        (an open arrow at A or A′ where the polygon goes on past it; none where a sheet edge cuts it), its label
+        centred above it in the row's colour on a white halo, and the row's dashed edge lines at the true ends (to the
+        ground or the frame bottom). Inside the frame they are clipped by it; above it nothing is."""
+        marks = self._areas_layout()
+        if not marks:
+            return
+        ax, k = self.ax, self.k
+        fx, fz = k / self.kx, k / self.kz
+        half_lw = AREA_LW / 144.0 / self.kz                # half the line's width, ft up (widths are not scaled by k)
+        for m in marks:
+            clip = m.spot.place != "above"
+            line_kw = dict(color=m.color, lw=AREA_LW, solid_capstyle="butt", dash_capstyle="butt", zorder=AREA_Z,
+                           gid=AREA_GID, clip_on=clip)
+            dash = dict(ls=(0, tuple(v / AREA_LW for v in AREA_DASH_PT))) if m.dashed else {}
+            ax.add_line(Line2D([m.a, m.b], [m.y, m.y], **dash, **line_kw))
+            for s, is_open, d in m.ends:
+                if is_open:                                # the open arrow: past A (pointing left) or A′
+                    ax.add_line(Line2D([s + d * AREA_ARROW_IN * fx, s, s + d * AREA_ARROW_IN * fx],
+                                       [m.y + AREA_ARROW_HALF_IN * fz, m.y, m.y - AREA_ARROW_HALF_IN * fz],
+                                       solid_joinstyle="miter", **line_kw))
+                    continue
+                ax.add_line(Line2D([s, s], [m.y + half_lw, m.y - AREA_TICK_IN * fz], **line_kw))
+                if m.edges in ("ground", "full"):
+                    if m.edges == "full":
+                        low = self.z0
+                    else:
+                        low = self.model.ground.z_at(s)
+                        if not math.isfinite(low):
+                            low = self.model.ground.nearest_valid(s)
+                        if math.isfinite(low) and low < self.z0:   # never under the frame (one above it is not
+                            low = self.z0                          # clipped: a manual minimum over the ground)
+                    if math.isfinite(low) and low < m.y:
+                        for top, bottom in self._edge_runs(m, s, low, marks):
+                            ax.add_line(Line2D([s, s], [top, bottom], color=m.color, lw=AREA_EDGE_LW,
+                                               ls=(0, tuple(v / AREA_EDGE_LW for v in AREA_EDGE_DASH_PT)),
+                                               dash_capstyle="butt", zorder=AREA_EDGE_Z, gid=AREA_EDGE_GID,
+                                               clip_on=clip))
+            if m.label is not None:
+                x, y, _box = m.label
+                kw = dict(x=x, y=y, s=m.spot.text, ha="center", va="bottom", fontsize=LABEL_PT * k, color=m.color,
+                          clip_on=False)
+                ax.text(zorder=6, gid=AREA_LABEL_HALO_GID,
+                        path_effects=[patheffects.Stroke(linewidth=HALO_PT * k, foreground="white")], **kw)
+                ax.text(zorder=6, gid=AREA_LABEL_GID, **kw)
+
+    def _edge_runs(self, m: _AreaMark, s: float, low: float, marks: Sequence[_AreaMark]) -> List[Tuple[float, float]]:
+        """The (top, bottom) elevations of the edge line of `m` at station `s` from its line down to `low`, less where
+        it would run through another bracket's label on this page (with the halo's width around it, AREA_PAD_IN / 2
+        to the sides): an upper bracket's end often stands over the label of the one under it. [(m.y, low)] when it
+        passes none."""
+        x = self._x_in(s)
+        dx, dy = AREA_PAD_IN * self.k / 2.0, HALO_PT * self.k / 144.0
+        cuts = [(self.z0 + (o.label[2][2] - dy) / self.kz, self.z0 + (o.label[2][3] + dy) / self.kz)
+                for o in marks if o is not m and o.label is not None and o.label[2][0] - dx <= x <= o.label[2][1] + dx]
+        runs: List[Tuple[float, float]] = []
+        top = m.y
+        for lo, hi in sorted(cuts, key=lambda c: -c[1]):     # from the top down
+            if hi <= low or lo >= top:
+                continue
+            if hi < top:
+                runs.append((top, hi))
+            top = min(top, lo)
+            if top <= low:
+                break
+        if top > low:
+            runs.append((top, low))
+        return runs
 
     def _label(self, text, x, z, anchor, dx_pt, dy_pt, rotation, leader, fs, color=INK) -> None:
         arrow = None
@@ -944,6 +1163,10 @@ class _Painter:
             if direction:
                 out.append(_EndMark(f" ({direction})", station, x_dir, base * 72.0, "left", "baseline", END_DIR_PT,
                                     "normal", (x + x_dir / 72.0, x + (x_dir + wd) / 72.0, lo, hi)))
+        if self.above > 0.0:                               # over the band of bracket rows (0.3.6)
+            up = self.above
+            out = [m._replace(dy_pt=m.dy_pt + up * 72.0, box=(m.box[0], m.box[1], m.box[2] + up, m.box[3] + up))
+                   for m in out]
         return out
 
     def ends(self) -> None:
@@ -997,6 +1220,15 @@ class _Painter:
                 hard.append((pm.x - pm.half_w, pm.x + pm.half_w, pm.y - pm.below, pm.y + pm.above))
                 if pm.spot is not None:
                     hard.append(pm.spot.box)
+        if getattr(self.model, "other_areas", None):         # the brackets inside the frame and their labels (0.3.6)
+            for am in self._areas_layout():
+                if am.spot.place == "above":
+                    continue
+                y = self._z_in(am.y)
+                hard.append((self._x_in(am.a), self._x_in(am.b), y - AREA_TICK_IN * k,
+                             y + (AREA_LABEL_GAP_IN + LABEL_ROW_IN) * k))
+                if am.label is not None:
+                    hard.append(am.label[2])
         soft = [(self._x_in(h.station) - 0.01, self._x_in(h.station) + 0.01,
                  self._z_in(max(min(h.top, h.bottom), self.z0)), self._z_in(max(h.top, h.bottom)))
                 for h in lay.hits if draws_depth_line(h, s)]
@@ -1094,17 +1326,20 @@ def fit_pt(text: str, size: float, width_in: float, weight: str = "normal", fig:
     return text.rstrip() + "…"
 
 
-def _title(fig: Figure, model: SectionModel, settings: Settings, page: PageLayout) -> None:
+def _title(fig: Figure, model: SectionModel, settings: Settings, page: PageLayout, above_in: float = 0.0) -> None:
     """Standard layout: "CROSS SECTION A–A′" and the optional title line under it, centred on the plot. A title
     line too long to sit between the end letters lifts both lines clear of them (STD_TITLE_RAISE_IN) and may
-    then run past the plot, kept within the printer edge (smaller, down to 7 pt, then cut short with "…")."""
+    then run past the plot, kept within the printer edge (smaller, down to 7 pt, then cut short with "…").
+    `above_in` (0.3.6, Plan.above_in): the band of bracket rows over the frame, which the title stands above."""
     if settings.compact_layout:
-        _title_compact(fig, settings, page)
+        _title_compact(fig, settings, page, above_in)
         return
     T = fig.dpi_scale_trans
     edge, W = edge_in(settings), page.page_w
     cx = page.plot_left + page.plot_w / 2.0
     top = page.plot_bottom + page.plot_h
+    if above_in > 0.0:
+        top += above_in
     line, size, dy = settings.title, STD_LINE_PT, 0.0
     if line:
         lo, hi = _title_line_room(fig, model, settings, page)
@@ -1153,12 +1388,15 @@ def _centred_text(fig: Figure, cx: float, y: float, text: str, edge: float, W: f
         fig.text(min(max(cx - w / 2.0, edge), W - edge - w), y, text, transform=T, ha="left", va="baseline", **kw)
 
 
-def _title_compact(fig: Figure, settings: Settings, page: PageLayout) -> None:
+def _title_compact(fig: Figure, settings: Settings, page: PageLayout, above_in: float = 0.0) -> None:
     """One line over the end-letter row: the title in bold, then " · " and the optional title line. Centred
-    on the plot, kept within the printer edge (the title line gets smaller, then shorter, if need be)."""
+    on the plot, kept within the printer edge (the title line gets smaller, then shorter, if need be). `above_in`:
+    as for _title."""
     T = fig.dpi_scale_trans
     edge = edge_in(settings)
     y = page.plot_bottom + page.plot_h + compact_rows_in()[1]
+    if above_in > 0.0:
+        y += above_in
     head = title_text(settings, page)
     room = page.page_w - 2.0 * edge
     w_head = ink_width_pt(fig, head, TITLE_PT_COMPACT, "bold") / 72.0
@@ -1310,9 +1548,28 @@ def draw_swatch(fig: Figure, model: SectionModel, settings: Settings, entry: Any
                               gid=LEGEND_LINE_GID))
     elif entry.kind == "point":                       # an other-points row: its symbol, at most 6 pt
         info = model.other_layers[entry.key]
-        for art in _symbol_artists(info.shape, min(float(info.size), LEGEND_SYMBOL_MAX_PT), 1.0, info.color,
-                                   x + SWATCH_IN / 2.0, y, 1.0, 1.0, transform=T):
-            fig.add_artist(art)
+        shape, size = resolve(info.shape), min(float(info.size), LEGEND_SYMBOL_MAX_PT)
+        if shape in LEGACY_DRAWN:                     # 0.3.5's six: the origin at the swatch centre
+            for art in _symbol_artists(shape, size, 1.0, info.color, x + SWATCH_IN / 2.0, y, 1.0, 1.0, transform=T):
+                fig.add_artist(art)
+        else:                                         # a catalogue symbol: centred on its ink (its tail to the right)
+            left, right, bottom, top = glyph_bbox(shape, size, 1.0)
+            for art in _symbol_artists(shape, size, 1.0, info.color, x + SWATCH_IN / 2.0 - (left + right) / 2.0,
+                                       y - (bottom + top) / 2.0, 1.0, 1.0, transform=T):
+                art.set_gid(LEGEND_SYMBOL_GID)
+                fig.add_artist(art)
+    elif entry.kind == "area":                        # a polygon row (0.3.6): a small bracket in its colour and line
+        info = model.other_layers[entry.key]
+        kw = dict(transform=T, color=info.color, lw=AREA_LW, solid_capstyle="butt", gid=LEGEND_AREA_GID)
+        if getattr(info, "bracket_style", "solid") != "dash":
+            fig.add_artist(Line2D([x, x, x + SWATCH_IN, x + SWATCH_IN], [y - 0.03, y + 0.02, y + 0.02, y - 0.03],
+                                  solid_joinstyle="miter", dash_capstyle="butt", **kw))
+        else:                                         # as on the sheet: the line dashed, its ticks solid (from half
+            top = y + 0.02 + AREA_LW / 144.0          # the line's width above it: they cover the corners)
+            fig.add_artist(Line2D([x, x + SWATCH_IN], [y + 0.02, y + 0.02],
+                                  ls=(0, tuple(v / AREA_LW for v in AREA_DASH_PT)), dash_capstyle="butt", **kw))
+            fig.add_artist(Line2D([x, x, math.nan, x + SWATCH_IN, x + SWATCH_IN],
+                                  [y - 0.03, top, math.nan, top, y - 0.03], **kw))
     elif entry.kind == "surface":
         sp = model.surfaces[entry.key]
         fig.add_artist(Line2D([x, x + SWATCH_IN], [y, y], transform=T, color=sp.color, lw=sp.width,
@@ -1430,8 +1687,9 @@ def draw_page(fig: Figure, model: SectionModel, settings: Settings, plan: Plan, 
         p.hits()
         p.screens()
         p.other_points()
+        p.areas()
         p.ends()
-        _title(fig, model, settings, page)
+        _title(fig, model, settings, page, getattr(plan, "above_in", 0.0))
         _vbar(fig, settings, plan, page)
         _bottom_block(fig, model, settings, plan, page)
 
@@ -1446,16 +1704,30 @@ def draw_preview(fig: Figure, model: SectionModel, settings: Settings, plan: Pla
         if W <= 0.5 or H <= 0.5:
             return []
         ml, mr, mt, mb = 0.72, 0.72, 0.55, 0.5
+        above = getattr(plan, "above_in", 0.0)
+        if above > 0.0:                                  # the band of bracket rows (0.3.6; drawn at k <= 1 of it)
+            mt += above
         pw = plan.plot_length / settings.h_scale
         ph = (plan.z_max - plan.z_min) / settings.v_scale
         aw_av, ah_av = max(W - ml - mr, 0.3), max(H - mt - mb, 0.3)
         k = min(aw_av / pw, ah_av / ph)
+        if above > 0.0:
+            # its rows stack at the preview's own scale (scales.area_band_in): its labels are relatively larger than
+            # the sheet's, so it may need more rows (never fewer than the sheet's band)
+            for _ in range(3):
+                own = area_band_in(model, settings, plan.plot_length, k, min(max(k, 0.85), 1.0))
+                if own <= above:
+                    break
+                mt += own - above
+                above = own
+                aw_av, ah_av = max(W - ml - mr, 0.3), max(H - mt - mb, 0.3)
+                k = min(aw_av / pw, ah_av / ph)
         aw, ah = pw * k, ph * k
         left, bottom = ml + (aw_av - aw) / 2.0, mb + (ah_av - ah) / 2.0
         ax = fig.add_axes((left / W, bottom / H, aw / W, ah / H))
         # paper-sized marks shrink with the drawing, but not below ~6 pt text
         p = _Painter(fig, ax, model, settings, plan, 0.0, plan.plot_length, pt_scale=min(max(k, 0.85), 1.0),
-                     preview=True)
+                     preview=True, above_in=above)
         p.setup_axes()
         p.grid()
         p.surfaces()
@@ -1465,6 +1737,7 @@ def draw_preview(fig: Figure, model: SectionModel, settings: Settings, plan: Pla
         p.hits()
         p.screens()
         placed = p.other_points()
+        p.areas()
         p.ends()
         if not plan.fits and plan.message:
             lines = wrap_text("Does not fit: " + plan.message, 7.0, max(W - 0.3, 1.0))

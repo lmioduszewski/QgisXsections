@@ -26,10 +26,10 @@ from xsections.ui import widgets as W  # noqa: E402
 from xsections.ui.dock import XSectionsDock  # noqa: E402
 
 GREEN, GRAY = GRID_PRESETS["green"], GRID_PRESETS["gray"]
-GREEN_LINE = ('<span style="color:#5f9a72">━━</span> Major 0.7 pt &nbsp; <span style="color:#a8c8b2">──</span> '
-              'Minor 0.35 pt &nbsp; solid · the default')
-GRAY_LINE = ('<span style="color:#6e6e6e">━━</span> Major 0.7 pt &nbsp; <span style="color:#b4b4b4">──</span> '
-             'Minor 0.35 pt &nbsp; solid')
+GREEN_LINE = ('<span style="color:#5f9a72">━━</span> Major 0.7 pt &nbsp;&nbsp; <span style="color:#a8c8b2">──</span> '
+              'Minor 0.35 pt &nbsp;&nbsp; solid')
+GRAY_LINE = ('<span style="color:#6e6e6e">━━</span> Major 0.7 pt &nbsp;&nbsp; <span style="color:#b4b4b4">──</span> '
+             'Minor 0.35 pt &nbsp;&nbsp; solid')
 NEW_KEYS = ("grid_major_color", "grid_major_width", "grid_major_style", "grid_minor_color", "grid_minor_width",
             "grid_minor_style", "grid_custom_used", "depth_lw_black", "depth_lw_color")
 
@@ -78,32 +78,42 @@ class Layout(StyleCase):
         self.assertNotIn("data_color", D.STYLE_KEYS)
 
     def test_the_mockup_order(self):
-        """Grid, its preset line or the Custom table (with the spacing note and Start from), Depth lines (NEW, Reset),
-        Black and gray | Color, the hint, Printer edge | Fill with grid under a dashed rule, the checkboxes, the
-        note."""
+        """(0.3.6, the panel mockup) Grid: Look, its preset line or the Custom table (with the spacing note and Start
+        from), Spacing from the scale, the typed spacing, Fill sheet | Below lowest; Depth lines (Reset in its
+        heading): Black & gray | Color, the hint; Page: Printer edge, the checkboxes, the hint."""
         d = self.dock
         body = d.grp_style.body_layout
-        top = [body.itemAt(i).widget() for i in range(body.count())]
+        subs = [body.itemAt(i).widget() for i in range(body.count())]
+        self.assertEqual([sub.title() for sub in subs], ["Grid", "Depth lines", "Page"])
 
-        def index(w):
-            return next(i for i, t in enumerate(top) if t is w or t.isAncestorOf(w))
+        def indexes(sub, widgets):
+            lay = sub.body_layout
+            top = [lay.itemAt(i).widget() for i in range(lay.count())]
+            return [next(i for i, t in enumerate(top) if t is w or t.isAncestorOf(w)) for w in widgets]
 
-        order = [d.grid_color, d.grid_info, d.grid_custom_box, d.depth_lw_head, d.depth_lw_black, d.depth_lw_hint,
-                 d.edge_margin, d.compact_layout]
-        self.assertEqual([index(w) for w in order], list(range(len(order))))
-        self.assertIs(top[index(d.edge_margin)], d.style_rule)
-        self.assertTrue(d.style_rule.isAncestorOf(d.fill_grid))
-        self.assertEqual((d.style_rule.objectName(), d.depth_lw_head.objectName()), ("xsRuleTop", "xsSubheadRow"))
-        self.assertEqual(top[-1].text(), "The defaults leave the most room to draw and the paper clear for colored "
-                                         "pencil.")
-        self.assertTrue(d.depth_lw_head.isAncestorOf(d.btn_lw_reset) and d.depth_lw_head.isAncestorOf(d.depth_lw_new))
+        grid = [d.grid_color, d.grid_info, d.grid_custom_box, d.grid_auto, d.grid_spacing_row, d.fill_grid]
+        self.assertEqual(indexes(subs[0], grid), list(range(1, len(grid) + 1)))          # (0: the heading)
+        self.assertEqual(indexes(subs[1], [d.depth_lw_head, d.depth_lw_black, d.depth_lw_hint]), [0, 1, 2])
+        self.assertEqual(indexes(subs[2], [d.edge_margin, d.compact_layout, d.style_hint]), [1, 2, 3])
+        pair_of = lambda w: w.parentWidget().parentWidget()          # noqa: E731  (field box -> its pair)
+        self.assertTrue(pair_of(d.fill_grid).isAncestorOf(d.below_in))
+        self.assertTrue(pair_of(d.depth_lw_black).isAncestorOf(d.depth_lw_color))
+        self.assertFalse(hasattr(d, "style_rule"))
+        self.assertIsInstance(d.depth_lw_head, W.SubsectionHeading)
+        self.assertIs(d.depth_lw_head, subs[1].heading)
+        self.assertEqual(d.style_hint.text(), "The defaults leave the most room to draw and the paper clear for colored "
+                                              "pencil.")
+        self.assertTrue(d.depth_lw_head.isAncestorOf(d.btn_lw_reset))
+        self.assertFalse(hasattr(d, "depth_lw_new"))
         self.assertEqual(d.depth_lw_hint.text(), "Which layers are black, gray or in color is set for each layer, under "
-                                                 "Explorations &gt; <b>Drawn in</b>.")
+                                                 "Explorations › <b>Drawn in</b>.")
         self.assertEqual([d.grid_color.itemText(i) for i in range(3)], ["Green", "Gray", "Custom"])
         self.assertEqual([b.toolTip() for b in d.grid_color.buttons()],
                          ["Green engineering pad (the default)", "Gray, for black-and-white printers",
                           "Your own colors, widths and line styles"])
         # shown: Custom's table, column by column; Major over Minor; the spacing note and Start from under it
+        W.set_verbose(True)                                  # (0.3.6: the spacing note is a Verbose hint)
+        self.addCleanup(W.set_verbose, False)
         self.click(d.grid_color, "custom")
         d.resize(340, 900)
         d.show()
@@ -123,7 +133,7 @@ class Layout(StyleCase):
             self.assertLess(pos(d.grid_spacing_note).y(), pos(d.depth_lw_head).y())
             self.assertGreaterEqual(d.grid_major_width.width(), 68)
             heads = [w.text() for w in d.grid_custom_box.findChildren(W.QLabel) if w.objectName() == "xsFieldLabel"]
-            self.assertEqual(heads, ["COLOR", "WIDTH", "LINE"])
+            self.assertEqual(heads, ["Color", "Width", "Line"])
             self.assertFalse(d.scroll.horizontalScrollBar().isVisible())
         finally:
             d.hide()
@@ -181,11 +191,9 @@ class Layout(StyleCase):
             self.assertEqual((s.minimum(), s.maximum(), s.singleStep(), s.decimals(), s.suffix(), s.toolTip()),
                              (0.25, hi, 0.05, 2, " pt", tip))
         self.assertEqual((d.depth_lw_black.value(), d.depth_lw_color.value()), (0.75, 1.6))
-        # the NEW badge and Reset
-        self.assertFalse(d.depth_lw_new.isHidden())
-        self.assertEqual((d.depth_lw_new.text(), d.depth_lw_new.objectName(), d.depth_lw_new.toolTip()),
-                         ("NEW", "xsNewBadge", "New in 0.3.4"))
-        self.assertEqual(D.NEW_BADGE_VERSION, "0.3.4")
+        # Reset (0.3.6: the NEW badge is gone)
+        self.assertFalse(hasattr(d, "depth_lw_new"))
+        self.assertFalse(hasattr(D, "NEW_BADGE_VERSION"))
         self.assertEqual((d.btn_lw_reset.text(), d.btn_lw_reset.toolTip()), ("Reset", "Back to 0.75 pt and 1.6 pt"))
         d.depth_lw_black.setValue(1.0)
         d.depth_lw_color.setValue(2.25)
@@ -207,11 +215,11 @@ class Layout(StyleCase):
         self.assertTrue(d.grid_auto.isChecked())
         self.assertEqual(d.grid_spacing_note.text(), "Major lines every inch, minor every tenth.")
         d.grid_auto.setChecked(False)
-        self.assertEqual(d.grid_spacing_note.text(), "Major and minor lines at the spacing set under Scale & sheet.")
+        self.assertEqual(d.grid_spacing_note.text(), "Major and minor lines at the spacing below.")
         d.grid_auto.setChecked(True)
         self.assertEqual(d.grid_spacing_note.text(), "Major lines every inch, minor every tenth.")
         d.apply_settings(Settings(grid_auto=False, grid_color="custom"))
-        self.assertEqual(d.grid_spacing_note.text(), "Major and minor lines at the spacing set under Scale & sheet.")
+        self.assertEqual(d.grid_spacing_note.text(), "Major and minor lines at the spacing below.")
 
 
 class CustomGrid(StyleCase):

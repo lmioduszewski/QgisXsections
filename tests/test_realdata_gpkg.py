@@ -47,6 +47,7 @@ from xsections.core.section import raster_sampler, resolve_line, section_crs  # 
 from xsections.render import figure as F  # noqa: E402
 from xsections.render import scales as S  # noqa: E402
 from xsections.ui import settings_store  # noqa: E402
+from xsections.ui import widgets as W  # noqa: E402
 from xsections.ui.dock import CSV_COLUMNS, XSectionsDock  # noqa: E402
 from xsections.ui.point_rows import TypeList  # noqa: E402
 from xsections.ui.preview import PreviewWidget  # noqa: E402
@@ -460,8 +461,13 @@ class RealGeoPackagePanel(unittest.TestCase):
         self.assertEqual(d.other_rows, [])                                 # no layer named like seeps or springs
         s = d.settings()
         self.assertEqual(s.dem_layer_id, self.dem.id())
-        want = {AESI: aesi_row(self.L[AESI]), OTHER: other_row(self.L[OTHER]),
-                SUPPLY: supply_row(self.L[SUPPLY], visible=False)}
+        # (0.3.6: a fresh row keeps the fields it guessed from their names to be checked: its "check" badge)
+        want = {AESI: aesi_row(self.L[AESI], guessed=["label_field", "type_field", "top_field", "depth_field",
+                                                      "wl_field", "wl_date_field"]),
+                OTHER: other_row(self.L[OTHER], guessed=["label_field", "type_field", "top_field", "depth_field"]),
+                SUPPLY: supply_row(self.L[SUPPLY], visible=False, guessed=["label_field", "type_field", "top_field",
+                                                                           "depth_field", "atd_field",
+                                                                           "atd_date_field"])}
         rows = layer_rows(s)
         self.assertEqual(rows, [want[r.layer().name()] for r in d.explo_rows])
         for row in rows:
@@ -652,6 +658,8 @@ class RealGeoPackagePanel(unittest.TestCase):
         style box names the style and its 13 categories, shows 4 chips (the categories plotted on the dense line
         first, in the style's order), "+ 9 more" and the foot. A plotted category switched off in the renderer and
         styleChanged: the box says so, the section is rebuilt (nothing saved) and those explorations are black."""
+        W.set_verbose(True)                                # (0.3.6: the box's foot is a Verbose hint)
+        self.addCleanup(W.set_verbose, False)
         lyr = self.L[AESI]
         lyr.setRenderer(categorized_renderer("ExploType", CUMBERLAND_AESI))
         d = self.new_dock()

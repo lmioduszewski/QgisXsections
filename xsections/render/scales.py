@@ -11,8 +11,12 @@ import dataclasses
 import math
 from typing import Any, Callable, Iterable, List, NamedTuple, Optional, Sequence, Tuple, Union
 
-from ..core.model import (GroundProfile, Hit, PageLayout, Plan, SectionError, SectionModel, Settings,
+from ..core.model import (AREA_PLACES, GroundProfile, Hit, PageLayout, Plan, SectionError, SectionModel, Settings,
                           clean_orientation)
+# the symbol geometry moved to render/symbols.py in 0.3.6; these stay scales' names (figure.py, the ui and the tests)
+from .symbols import (ASTERISK_MIN_W_PT, ASTERISK_W, LEGEND_SYMBOL_MAX_PT, SYMBOL_EDGE_PT,  # noqa: F401
+                      _CIRCLE_SIDES, Capsule, asterisk_width_pt, symbol, symbol_capsules, symbol_edge_pt,
+                      symbol_extent, symbol_half_pt, symbol_outline)
 
 # name -> (long side, short side, display name), inches
 SHEETS = {"letter": (11, 8.5, "Letter"), "tabloid": (17, 11, "Tabloid"), "ansic": (22, 17, "ANSI C"),
@@ -181,9 +185,10 @@ def pretty_label(s: str) -> str:
 
 def display_label(hit: Hit, settings: Settings) -> str:
     """'MW-3' or, with label_offset, 'MW-3 · 40 ft S': the offset and the direction it was projected onto the line
-    (hit.direction, 0.3.5: a well 40 ft north of an east-west line)."""
+    (hit.direction, 0.3.5: a well 40 ft north of an east-west line). A crossing of a line row (0.3.6: on the line,
+    no offset) is its name only."""
     name = hit.label if hit.label not in (None, "") else str(hit.fid)
-    if settings.label_offset:
+    if settings.label_offset and getattr(hit, "kind", "point") != "crossing":
         d = f" {hit.direction}" if hit.direction else ""
         return f"{name} · {fmt_num(round(hit.offset))} ft{d}"
     return name
@@ -659,95 +664,16 @@ def tick_base(hit: Hit, settings: Settings) -> float:
 
 # ----------------------------------------------------------------------------- other-point symbols
 # Pure geometry of the Other points symbols (figure.py draws them from it, the panel paints its swatch with it).
-# Sizes in points, then paper inches (/ 72); y up; the centre at (0, 0); s = size * k / 2 (pt). The ink of every
+# The catalogue and every symbol's geometry live in render/symbols.py (0.3.6); here: resting them on the ground line.
+# Sizes in points, then paper inches (/ 72); y up; the origin at (0, 0); s = size * k / 2 (pt). The ink of every
 # symbol is a set of capsules (a segment thickened by a radius: a stroke with round ends), so its top and bottom
 # at any x are exact (capsule_top / capsule_bottom) and it can rest on the drawn ground line (rest_on_line).
 GROUND_LW = 1.1                            # the drawn ground line, pt (not scaled; figure.py draws it with this)
-SYMBOL_EDGE_PT = 0.6                       # white edge of the filled shapes, pt (x k), round joins
-ASTERISK_MIN_W_PT, ASTERISK_W = 1.0, 0.42  # asterisk stroke width: max(1 pt x k, 0.42 s) (bold)
 OTHER_REST_GAP_PT = 0.1                    # on the ground line: the lowest ink this far above the line's top (x k)
-LEGEND_SYMBOL_MAX_PT = 6.0                 # a legend swatch draws the symbol at most this size
 OTHER_LABEL_GAP_IN = 0.02                  # label bottom above the symbol's top (x k)
 OTHER_LABEL_GROUND_IN = 0.05               # ... and at least this far above the ground line at its station (x k)
-_CIRCLE_SIDES = 48                         # symbol_outline of the circle: a polygon this fine (the swatch)
-
-
-class Capsule(NamedTuple):
-    """A segment from (ax, ay) to (bx, by) thickened by r (round ends), paper inches; a = b is a disc."""
-    ax: float
-    ay: float
-    bx: float
-    by: float
-    r: float
-
-
-def symbol_half_pt(size_pt: float, k: float = 1.0) -> float:
-    """s of the symbol table: half the nominal size, points."""
-    return float(size_pt) * k / 2.0
-
-
-def asterisk_width_pt(size_pt: float, k: float = 1.0) -> float:
-    """Stroke width of the asterisk, points: bold, max(1 pt, 0.42 s)."""
-    return max(ASTERISK_MIN_W_PT * k, ASTERISK_W * symbol_half_pt(size_pt, k))
-
-
-def symbol_edge_pt(k: float = 1.0) -> float:
-    """Width of the white edge round a filled shape, points."""
-    return SYMBOL_EDGE_PT * k
-
-
-def symbol_outline(shape: str, size_pt: float, k: float = 1.0) -> List[Tuple[float, float]]:
-    """Polygon vertices of a filled shape, paper inches from the centre (y up): square, diamond, star (10 vertices
-    from the top, clockwise), triangle; the circle as a fine polygon (radius s). [] for the asterisk (strokes only:
-    symbol_capsules)."""
-    s = symbol_half_pt(size_pt, k) / 72.0
-    if shape == "square":
-        a = 0.85 * s
-        return [(-a, -a), (a, -a), (a, a), (-a, a)]
-    if shape == "diamond":
-        a = 1.15 * s
-        return [(0.0, a), (a, 0.0), (0.0, -a), (-a, 0.0)]
-    if shape == "star":
-        out = []
-        for i in range(10):
-            r = (0.45 if i % 2 else 1.2) * s
-            t = math.radians(90.0 - 36.0 * i)
-            out.append((r * math.cos(t), r * math.sin(t)))
-        return out
-    if shape == "triangle":
-        return [(0.0, 1.1 * s), (1.1 * s, -0.8 * s), (-1.1 * s, -0.8 * s)]
-    if shape == "circle":
-        return [(s * math.cos(2 * math.pi * i / _CIRCLE_SIDES), s * math.sin(2 * math.pi * i / _CIRCLE_SIDES))
-                for i in range(_CIRCLE_SIDES)]
-    return []
-
-
-def symbol_capsules(shape: str, size_pt: float, k: float = 1.0) -> List[Capsule]:
-    """The ink of a symbol as capsules, paper inches from its centre. Asterisk: 4 strokes through the centre at 0,
-    45, 90 and 135 degrees, each from -1.25 s to +1.25 s (8 prongs), radius half the stroke width. Circle: one disc
-    of radius s + e/2 (the fill plus its white edge). The other filled shapes: their edges, radius e/2 (e = the
-    white edge; with round joins the ink is exactly the polygon plus these)."""
-    s = symbol_half_pt(size_pt, k) / 72.0
-    if shape == "circle":
-        return [Capsule(0.0, 0.0, 0.0, 0.0, s + symbol_edge_pt(k) / 2.0 / 72.0)]
-    if shape not in ("square", "diamond", "star", "triangle"):          # the asterisk (and anything unknown)
-        r = asterisk_width_pt(size_pt, k) / 2.0 / 72.0
-        a, h = 1.25 * s, 1.25 * s * math.sqrt(0.5)          # exact at 0 and 90 degrees (a true vertical stroke)
-        return [Capsule(-dx, -dy, dx, dy, r) for dx, dy in ((a, 0.0), (h, h), (0.0, a), (-h, h))]
-    pts = symbol_outline(shape, size_pt, k)
-    r = symbol_edge_pt(k) / 2.0 / 72.0
-    return [Capsule(pts[i][0], pts[i][1], pts[(i + 1) % len(pts)][0], pts[(i + 1) % len(pts)][1], r)
-            for i in range(len(pts))]
-
-
-def symbol_extent(caps: Sequence[Capsule]) -> Tuple[float, float, float]:
-    """(half width, depth below the centre, height above it) of the ink, paper inches."""
-    if not caps:
-        return 0.0, 0.0, 0.0
-    half_w = max(max(abs(c.ax), abs(c.bx)) + c.r for c in caps)
-    below = max(c.r - min(c.ay, c.by) for c in caps)
-    above = max(max(c.ay, c.by) + c.r for c in caps)
-    return half_w, below, above
+SPRING_FLAT_IN = 0.005                     # ground within this (paper inches, sheet scale) on both sides: flat: the
+                                           # spring's tail goes right (symbol_flip)
 
 
 def _capsule_edge(c: Capsule, x: float, sign: float) -> float:
@@ -871,12 +797,15 @@ def rest_on_line(gx: Sequence[float], gy: Sequence[float], x_c: float, caps: Seq
         if math.isfinite(x) and -half_w <= x - x_c <= half_w:
             dxs.add(x - x_c)
     top_at = (lambda x: _stroke_top_near(gx, gy, r, x)) if ascending else (lambda x: stroke_top(gx, gy, r, x))
+    # (0.3.6) each capsule only where it has ink (outside its x span capsule_bottom is +inf): the same minimum,
+    # for a fraction of the calls on the many-segment symbols (a stream's 24 capsules)
+    spans = [(min(c.ax, c.bx) - c.r - 1e-12, max(c.ax, c.bx) + c.r + 1e-12, c) for c in caps]
     best = -math.inf
     for dx in dxs:
         t = top_at(x_c + dx)
         if t == -math.inf:
             continue
-        low = min(capsule_bottom(c, dx) for c in caps)
+        low = min((capsule_bottom(c, dx) for lo, hi, c in spans if lo <= dx <= hi), default=math.inf)
         if low == math.inf:
             continue
         best = max(best, t - low)
@@ -906,14 +835,38 @@ def other_symbol(model: SectionModel, p: Any) -> Tuple[str, float, str]:
     return "asterisk", 7.0, "#1f6fb2"
 
 
+def symbol_flip(model: SectionModel, p: Any, settings: Settings) -> bool:
+    """True when the symbol of an other point is drawn mirrored: only symbols that mirror (the springs: their tail
+    points downhill), where the ground falls to the left. Worked out at sheet scale, so every sheet, tile and the
+    preview agree: the ground a tail's reach ((0.3 + 1.0) x size) either side of the station, a side in a DEM gap
+    taking the ground at the station. The tail goes to the lower side; on flat ground (within SPRING_FLAT_IN of paper)
+    to the right, toward A′."""
+    shape, size, _ = other_symbol(model, p)
+    if not symbol(shape).mirrors:
+        return False
+    ground = getattr(model, "ground", None)
+    if ground is None:
+        return False
+    reach_ft = (0.3 + 1.0) * size / 72.0 * float(settings.h_scale)
+    gs = getattr(p, "ground_at_station", math.nan)
+    zl, zr = ground.z_at(p.station - reach_ft), ground.z_at(p.station + reach_ft)
+    zl = zl if _finite(zl) else gs
+    zr = zr if _finite(zr) else gs
+    if not (_finite(zl) and _finite(zr)):
+        return False
+    return (zr - zl) / float(settings.v_scale) > SPRING_FLAT_IN       # higher on the right: it falls to the left
+
+
 def other_centre_in(p: Any, caps: Sequence[Capsule], ground: GroundProfile, x_in: Callable[[float], float],
-                    z_in: Callable[[float], float], kx: float, k: float = 1.0, thin: bool = False) -> float:
+                    z_in: Callable[[float], float], kx: float, k: float = 1.0, thin: bool = False,
+                    rests: bool = True) -> float:
     """Paper y (the units of `z_in`) of an other point's symbol centre. At the LIDAR or a field (how "lidar" /
     "field"): its elevation. On the ground line (how "line"): resting on the drawn line (rest_on_line over the
     ground vertices under the symbol plus one each side, the line GROUND_LW wide, OTHER_REST_GAP_PT x k above it);
     with no ground under it (a DEM gap) its lowest ink that far above the nearest valid ground. `thin`: the preview
-    (rest_on_line)."""
-    if p.how != "line":
+    (rest_on_line). `rests` False (the benchmark, symbols.Symbol.rests): on the ground line it is centred on the
+    line (p.z: the ground at its station, the nearest valid ground in a gap)."""
+    if p.how != "line" or not rests:
         return z_in(p.z)
     r = GROUND_LW / 2.0 / 72.0
     gap = OTHER_REST_GAP_PT * k / 72.0
@@ -1031,10 +984,22 @@ def other_label_layout(xs: Sequence[float], anchors: Sequence[float], widths: Se
 def other_label_top(model: SectionModel, settings: Settings, plot_length: float) -> float:
     """Elevation (ft) the other points' labels reach, plus LABEL_MARGIN_IN; -inf without points. The labels laid
     out on the whole section as figure.py draws them at sheet scale (k = 1; centres resting on the ground line
-    for the "line" points), clear of the exploration ticks and labels (marks_on_paper)."""
+    for the "line" points), clear of the exploration ticks and labels (marks_on_paper): other_label_boxes."""
+    _symbols, labels = other_label_boxes(model, settings, plot_length)
+    if not labels:
+        return -math.inf
+    return (max(box[3] for box in labels) + LABEL_MARGIN_IN) * float(settings.v_scale)
+
+
+def other_label_boxes(model: SectionModel, settings: Settings,
+                      plot_length: float) -> Tuple[List[Tuple[float, float, float, float]],
+                                                   List[Tuple[float, float, float, float]]]:
+    """(symbols, labels): the boxes (left, right, bottom, top) of the other points' symbols and of their labels,
+    paper inches from station 0 and elevation 0, laid out on the whole section at sheet scale as other_label_top
+    describes (the brackets inside the frame keep above them, area_layout)."""
     pts = getattr(model, "other_points", None) or []
     if not pts:
-        return -math.inf
+        return [], []
     v, hs = float(settings.v_scale), float(settings.h_scale)
     frame_w = plot_length / hs
 
@@ -1048,9 +1013,9 @@ def other_label_top(model: SectionModel, settings: Settings, plot_length: float)
     symbols = []                                         # every point's ink: no label covers a neighbour's symbol
     for p in pts:
         shape, size, _ = other_symbol(model, p)
-        caps = symbol_capsules(shape, size)
+        caps = symbol_capsules(shape, size, 1.0, symbol_flip(model, p, settings))
         half_w, below, above = symbol_extent(caps)
-        y_c = other_centre_in(p, caps, model.ground, x_in, z_in, 1.0 / hs)
+        y_c = other_centre_in(p, caps, model.ground, x_in, z_in, 1.0 / hs, rests=symbol(shape).rests)
         if not _finite(y_c):
             continue
         x = x_in(p.station)
@@ -1061,11 +1026,239 @@ def other_label_top(model: SectionModel, settings: Settings, plot_length: float)
         anchors.append(other_label_anchor(p, y_c, above, z_in))
         widths.append(text_width_in(display_label(p, settings), LABEL_PT))
     if not xs:
-        return -math.inf
+        return symbols, []
     obstacles = mark_obstacles(marks_on_paper(model.hits, settings, frame_w), settings.label_vertical) + symbols
     spots = other_label_layout(xs, anchors, widths, 1.0, frame_w, obstacles,
                                ground_top_fn(model.ground.stations, model.ground.z, x_in, z_in))
-    return (max(sp.box[3] for sp in spots) + LABEL_MARGIN_IN) * v
+    return symbols, [sp.box for sp in spots]
+
+
+# ----------------------------------------------------------------------------- brackets of the polygon rows (0.3.6)
+# A polygon row of Other features marks each stretch of the section line inside one of its polygons (model.AreaPiece)
+# with a bracket: a line with end ticks over the stretch, its label centred above it, inside the frame (above the
+# ground and the labels in its span) or in a band of rows over the frame. Paper inches / points (figure.py draws them
+# with these numbers; area_layout places them, the plan makes room for them).
+AREA_LW = 1.0                    # pt: the bracket line, its end ticks and its open arrow
+AREA_TICK_IN = 0.06              # an end tick hangs this far below the bracket line
+AREA_ARROW_IN, AREA_ARROW_HALF_IN = 0.06, 0.035   # the open arrow at A / A′: length back from its tip, half height
+AREA_LABEL_GAP_IN = 0.02         # the label's bottom above the bracket line (the label: LABEL_PT, the row's colour)
+AREA_PAD_IN = LABEL_PAD_IN       # 0.04: kept between two brackets' footprints side by side
+AREA_CLEAR_IN = 0.05             # inside: tick bottoms this far above the ground stroke and the labels under the span
+AREA_STACK_GAP_IN = 0.03         # inside: a bracket over another clears its label's top by this
+AREA_TOP_PAD_IN = 0.02           # inside, manual range: a label top kept this far under the frame top
+AREA_FRAME_GAP_IN = 0.03         # above: the frame top to the lowest row's tick bottoms
+AREA_ROW_IN = AREA_TICK_IN + AREA_LABEL_GAP_IN + LABEL_ROW_IN + 0.03     # one row of the band above (0.2218 in)
+AREA_DASH_PT = (4.0, 2.0)        # a dashed bracket line: absolute pt (divided by the width, as the grid's)
+AREA_EDGE_LW, AREA_EDGE_DASH_PT = 0.6, (3.0, 2.0)   # edge lines: pt, absolute dashes
+CONTINUES = " (continues)"       # after the label of a piece that runs past A or A′
+
+
+class AreaSpot(NamedTuple):
+    """Where the bracket of one piece (model.other_areas) goes, at sheet scale (area_layout)."""
+    index: int          # in model.other_areas
+    place: str          # "inside" | "above"
+    level: int          # 0 nearest the ground (inside) or the frame (above); the longer piece of two that overlap is
+    #                     always on the higher level
+    text: str           # what the label says: the label, else the row's legend name, + CONTINUES when open
+    label_x: float      # station of the label's centre (moved in to stay inside the plot)
+    line_z: float       # inside: elevation (ft) of the bracket line; above: nan
+    top_z: float        # inside: elevation of the label's top; above: nan
+    lowered: bool       # inside: moved down under z_cap (a manual range with no room)
+
+
+class AreaFrame(NamedTuple):
+    """A drawing that lays the brackets out at its own scale (the preview: figure.py's painter, whose labels are
+    relatively larger than the sheet's), for area_layout: paper inches from station 0 and the frame bottom."""
+    scale: float                          # its paper inches per sheet inch (the preview's drawing scale)
+    k: float                              # the scale of its marks and labels (the painter's pt_scale)
+    z_in: Callable[[float], float]        # elevation (ft) -> paper inches up from the frame bottom
+    z_of: Callable[[float], float]        # ... and back
+    obstacles: Sequence[Tuple[float, float, float, float]]   # its exploration ticks and labels, the other points'
+    #                                                          symbols and labels, as it lays them out
+
+
+class _AreaItem(NamedTuple):
+    """A piece as area_layout lays it out (paper inches at sheet scale, or an AreaFrame's)."""
+    index: int
+    place: str
+    name: str           # its label, else the row's legend name (the text without CONTINUES)
+    text: str
+    cx: float           # the label's centre
+    fl: float           # the footprint (the bracket and its label, AREA_PAD_IN wider): left and right
+    fr: float
+    order: tuple        # (length, start, row, text, index): shortest first
+
+
+def _area_items(model: SectionModel, settings: Settings, plot_length: float, scale: float = 1.0,
+                k: float = 1.0) -> List[_AreaItem]:
+    """Every piece of model.other_areas, in its order, with its place, label and footprint (at `scale` paper inches
+    per sheet inch with labels and gaps at `k`: an AreaFrame's; 1, 1: the sheet)."""
+    pieces = getattr(model, "other_areas", None) or []
+    if not pieces:
+        return []
+    infos = getattr(model, "other_layers", None) or []
+    hs = float(settings.h_scale)
+    frame_w = plot_length / hs * scale
+    size, pad = LABEL_PT * k, AREA_PAD_IN * k
+    out = []
+    for i, p in enumerate(pieces):
+        j = getattr(p, "layer_index", 0)
+        info = infos[j] if isinstance(j, int) and 0 <= j < len(infos) else None
+        place = getattr(info, "bracket", "inside") if info is not None else "inside"
+        place = place if place in AREA_PLACES else "inside"
+        name = (p.label or "").strip() or (info.name if info is not None else "")
+        text = name + (CONTINUES if p.open_start or p.open_end else "")
+        w = text_width_in(text, size) * RASTER_SLACK
+        x0, x1 = p.start / hs * scale, p.end / hs * scale
+        cx = clamp_centre((x0 + x1) / 2.0, w, frame_w)
+        out.append(_AreaItem(i, place, name, text, cx, min(x0, cx - w / 2.0) - pad / 2.0,
+                             max(x1, cx + w / 2.0) + pad / 2.0, (p.end - p.start, p.start, j, text, i)))
+    return out
+
+
+def _area_levels(items: Sequence[_AreaItem]) -> dict:
+    """{index: level}: shortest first, each piece one level above the highest of those already placed (of its own
+    place) whose footprints overlap its own, else 0. So of two that overlap, the longer is always higher."""
+    level: dict = {}
+    placed: List[_AreaItem] = []
+    for it in sorted(items, key=lambda it: it.order):
+        over = [level[o.index] for o in placed if o.place == it.place and o.fl < it.fr and it.fl < o.fr]
+        level[it.index] = max(over) + 1 if over else 0
+        placed.append(it)
+    return level
+
+
+def area_layout(model: SectionModel, settings: Settings, plot_length: float, z_cap: Optional[float] = None,
+                point_boxes: Optional[Sequence[Tuple[float, float, float, float]]] = None,
+                z_floor: Optional[float] = None, frame: Optional[AreaFrame] = None) -> List[AreaSpot]:
+    """The brackets of the polygon rows' pieces (model.other_areas), in the pieces' order, laid out on the whole
+    section at sheet scale (paper inches: x = station / h_scale, y = z / v_scale), so the plan and every painter
+    agree. Each place stacks on its own (_area_levels). Above the frame the level is all. Inside, a bracket's tick
+    bottoms stand AREA_CLEAR_IN above the ground stroke and the exploration ticks and labels and the other points'
+    symbols and labels (`point_boxes`, else other_label_boxes) under its footprint, and AREA_STACK_GAP_IN above the
+    label top of every bracket under it; with `z_floor` (the frame bottom: a manual minimum may cut off the ground)
+    never under it, so no bracket is lost under the frame. With `z_cap` (the frame top) each cluster of overlapping
+    inside brackets whose highest label top is above z_cap - AREA_TOP_PAD_IN moves down whole (lowered). `frame`:
+    the same in that drawing's own paper inches, its labels and gaps at its k, over its obstacles (the preview).
+    [] without pieces."""
+    v, hs = float(settings.v_scale), float(settings.h_scale)
+    if frame is None:
+        scale, k = 1.0, 1.0
+
+        def z_in(z: float) -> float:
+            return z / v
+
+        def z_of(y: float) -> float:
+            return y * v
+    else:
+        scale, k, z_in, z_of = frame.scale, frame.k, frame.z_in, frame.z_of
+    items = _area_items(model, settings, plot_length, scale, k)
+    if not items:
+        return []
+    levels = _area_levels(items)
+    inside = sorted((it for it in items if it.place == "inside"), key=lambda it: it.order)
+    lines: dict = {}
+    tops: dict = {}
+    lowered: set = set()
+    if inside:
+        ground_top = ground_top_fn(model.ground.stations, model.ground.z, lambda st: st / hs * scale, z_in)
+        if frame is not None:
+            obstacles = list(frame.obstacles)
+        else:
+            obstacles = mark_obstacles(marks_on_paper(model.hits, settings, plot_length / hs), settings.label_vertical)
+            if point_boxes is None:
+                symbols, labels = other_label_boxes(model, settings, plot_length)
+                point_boxes = symbols + labels
+            obstacles += list(point_boxes)
+        floor = z_in(z_floor) if z_floor is not None and _finite(z_floor) else -math.inf
+        placed: List[_AreaItem] = []
+        for it in inside:
+            base = ground_top(it.fl, it.fr)
+            for left, right, _bottom, top in obstacles:
+                if left < it.fr and it.fl < right:
+                    base = max(base, top)
+            if base == -math.inf:                        # no ground under it (a DEM gap) and nothing else
+                p = model.other_areas[it.index]
+                g = model.ground.nearest_valid((p.start + p.end) / 2.0)
+                base = z_in(g) if _finite(g) else 0.0
+            if base < floor:                             # the ground under it is cut off: on the frame bottom
+                base = floor
+            bottom = base + AREA_CLEAR_IN * k
+            for o in placed:
+                if o.fl < it.fr and it.fl < o.fr:
+                    bottom = max(bottom, tops[o.index] + AREA_STACK_GAP_IN * k)
+            lines[it.index] = bottom + AREA_TICK_IN * k
+            tops[it.index] = lines[it.index] + AREA_LABEL_GAP_IN * k + LABEL_ROW_IN * k
+            placed.append(it)
+        if z_cap is not None:
+            cap = z_in(z_cap) - AREA_TOP_PAD_IN * k
+            clusters: List[List[_AreaItem]] = []          # connected by overlapping footprints
+            for it in sorted(inside, key=lambda it: (it.fl, it.index)):
+                if clusters and it.fl < max(o.fr for o in clusters[-1]):
+                    clusters[-1].append(it)
+                else:
+                    clusters.append([it])
+            for cluster in clusters:
+                over = max(tops[it.index] for it in cluster) - cap
+                if over > 0.0:
+                    for it in cluster:
+                        lines[it.index] -= over
+                        tops[it.index] -= over
+                        lowered.add(it.index)
+    return [AreaSpot(it.index, it.place, levels[it.index], it.text, float(it.cx / scale * hs),
+                     float(z_of(lines[it.index])) if it.index in lines else math.nan,
+                     float(z_of(tops[it.index])) if it.index in tops else math.nan, it.index in lowered)
+            for it in items]
+
+
+def area_top(model: SectionModel, settings: Settings, plot_length: float,
+             point_boxes: Optional[Sequence[Tuple[float, float, float, float]]] = None,
+             z_floor: Optional[float] = None) -> float:
+    """Elevation (ft) the labels of the brackets inside the frame reach, plus LABEL_MARGIN_IN (the automatic range
+    gives them room, as it does the labels; `z_floor`: over a manual minimum); -inf without inside pieces."""
+    tops = [sp.top_z for sp in area_layout(model, settings, plot_length, point_boxes=point_boxes, z_floor=z_floor)
+            if sp.place == "inside"]
+    if not tops:
+        return -math.inf
+    return max(tops) + LABEL_MARGIN_IN * float(settings.v_scale)
+
+
+def area_band_in(model: SectionModel, settings: Settings, plot_length: float, scale: float = 1.0,
+                 k: float = 1.0) -> float:
+    """Paper inches of the band of bracket rows over the frame (polygon rows "Above the frame"): AREA_FRAME_GAP_IN
+    and one AREA_ROW_IN per level, up to 0.01 in; 0.0 without pieces above. (`scale`, `k`: the levels of a drawing
+    of its own scale, the preview, whose band is this times its k.)"""
+    items = _area_items(model, settings, plot_length, scale, k)
+    above = [it for it in items if it.place == "above"]
+    if not above:
+        return 0.0
+    levels = _area_levels(items)
+    return _up(AREA_FRAME_GAP_IN + (1 + max(levels[it.index] for it in above)) * AREA_ROW_IN)
+
+
+def _and_list(names: Sequence[str], most: int = 4) -> str:
+    """ "A", "A and B", "A, B and C"; past `most`: "A, B, C, D and 2 more"."""
+    names = list(names)
+    if len(names) > most:
+        return ", ".join(names[:most]) + f" and {len(names) - most} more"
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def area_warnings(model: SectionModel, settings: Settings, plot_length: float, z_max: float,
+                  v_major: float, z_min: Optional[float] = None) -> List[str]:
+    """A manual range with no room for the brackets inside the frame (area_layout lowers them under its maximum;
+    where its minimum `z_min` cuts off the ground they stand on the frame bottom): one message naming them, with the
+    maximum that would hold them. [] when none is lowered."""
+    spots = area_layout(model, settings, plot_length, z_cap=z_max, z_floor=z_min)
+    low = [sp.index for sp in spots if sp.lowered]
+    if not low:
+        return []
+    names = {it.index: it.name for it in _area_items(model, settings, plot_length)}
+    v = float(settings.v_scale)
+    need = _ceil_to(area_top(model, settings, plot_length, z_floor=z_min) - LABEL_MARGIN_IN * v
+                    + AREA_TOP_PAD_IN * v, v_major)
+    return [f"Brackets of {_and_list(list(dict.fromkeys(names[i] for i in low)))} lowered: no room under the manual "
+            f"maximum of {fmt_num(z_max)} ft. Raise it to {fmt_num(need)} ft or set Elevations to Auto."]
 
 
 def sheet_label(key: str, landscape: bool) -> str:
@@ -1081,7 +1274,7 @@ def sheet_size(key: str, landscape: bool) -> Tuple[float, float]:
 
 def page_turns(settings: Settings) -> Tuple[bool, ...]:
     """The orientations plan() tries on each sheet, as `landscape` flags in order: Auto (settings.orientation
-    "auto", or anything unknown) landscape first, then portrait, the search of every version before 0.3.5;
+    "auto", or any other value) landscape first, then portrait, the search of every version before 0.3.5;
     Landscape or Portrait only that one (for one sheet and for tiling alike)."""
     o = clean_orientation(getattr(settings, "orientation", "auto"))
     return (True, False) if o == "auto" else (o == "landscape",)
@@ -1145,7 +1338,7 @@ def _data_extent(model: SectionModel, settings: Settings) -> Tuple[float, float,
         if p.how == "line" or not _finite(p.z):          # on the ground line: the ground and its headroom cover it
             continue
         shape, size, _ = other_symbol(model, p)
-        _, below, above = symbol_extent(symbol_capsules(shape, size))
+        _, below, above = symbol_extent(symbol_capsules(shape, size, 1.0, symbol_flip(model, p, settings)))
         if p.z - below * v < lo:
             lo, what = p.z - below * v, f"{p.label} ({p.layer_name})"
         hi = max(hi, p.z + above * v)
@@ -1212,9 +1405,9 @@ def z_limits(model: SectionModel, settings: Settings, v_major: float,
         lo = min([lo] + reach)
         z0 = _floor_to(lo - settings.below_in * v, v_major)
         # at least LABEL_HEADROOM_IN above the data; more when long or stacked labels need it (every row's
-        # exploration labels, and the other points' labels)
+        # exploration labels, the other points' labels, and the labels of the brackets inside the frame)
         z1 = _ceil_to(max(hi + LABEL_HEADROOM_IN * v, label_top(model.hits, settings),
-                          other_label_top(model, settings, length)), v_major)
+                          other_label_top(model, settings, length), area_top(model, settings, length)), v_major)
     if z1 <= z0 + _EPS:
         z1 = z0 + v_major
     return z0, z1, lowest, what
@@ -1283,8 +1476,9 @@ def manual_range_warnings(model: SectionModel, settings: Settings, z0: float, z1
         hs = float(settings.h_scale)
         for p in pts:
             shape, size, _ = other_symbol(model, p)
-            zc = other_centre_in(p, symbol_capsules(shape, size), model.ground, lambda st: st / hs, lambda z: z / v,
-                                 1.0 / hs) * v
+            caps = symbol_capsules(shape, size, 1.0, symbol_flip(model, p, settings))
+            zc = other_centre_in(p, caps, model.ground, lambda st: st / hs, lambda z: z / v, 1.0 / hs,
+                                 rests=symbol(shape).rests) * v
             if not _finite(zc):
                 continue
             if z0 - tol <= zc <= z1 + tol:
@@ -1394,7 +1588,7 @@ def hbar_extent_in(settings: Settings) -> Tuple[float, float]:
 class LegendEntry(NamedTuple):
     """One entry of the sheet's legend."""
     text: str
-    kind: str                  # layer | style | surface | screen | measured | atd | point
+    kind: str                  # layer | style | surface | screen | measured | atd | point | area (a polygon row, 0.3.6)
     key: Any = None            # the index of the exploration row in model.point_layers (layer, style), of the surface
     #                            in model.surfaces, of the other-points row in model.other_layers (point)
     color: str = ""            # layer: a single-symbol Color row's swatch colour ("" for Black and Gray rows);
@@ -1447,7 +1641,8 @@ def legend_entries(model: SectionModel, settings: Settings, z_min: Optional[floa
                    z_max: Optional[float] = None) -> List[LegendEntry]:
     """What the legend beside (compact) or under (standard) the scale bar lists: the exploration rows and the colours
     of Color rows (layer_entries), the other surfaces, the screen and water level symbols that are on the sheet, then
-    the other-points rows with a point on the section. With the drawn frame (`z_min`, `z_max`: the sheet), a row out
+    the other-points rows with a point (or a crossing) on the section, and the polygon rows with a piece, in row
+    order. With the drawn frame (`z_min`, `z_max`: the sheet), a row out
     of the elevation range counts only the levels and screens inside it (frame_levels, frame_screen); without (the
     plan, before the frame is known): every one, never fewer entries."""
     out = layer_entries(model, settings)
@@ -1463,9 +1658,12 @@ def legend_entries(model: SectionModel, settings: Settings, z_min: Optional[floa
         if any(w.kind == "atd" for w in levels):
             out.append(LegendEntry("Water at time of drilling (ATD)", "atd"))
     with_points = {p.layer_index for p in getattr(model, "other_points", None) or []}
+    with_areas = {a.layer_index for a in getattr(model, "other_areas", None) or []}
     for j, info in enumerate(getattr(model, "other_layers", None) or []):
-        if j in with_points:
+        if j in with_points:                             # points, or a line row's crossings: its symbol
             out.append(LegendEntry(info.name, "point", j))
+        elif j in with_areas:                            # a polygon row (0.3.6): a small bracket
+            out.append(LegendEntry(info.name, "area", j))
     return out
 
 
@@ -1627,7 +1825,7 @@ def vbar_dx_in(settings: Settings, label_w: float) -> float:
 
 
 def margins(settings: Settings, z_range: Optional[Tuple[float, float]] = None,
-            types: Sequence[str] = (), block_in: float = 0.0) -> dict:
+            types: Sequence[str] = (), block_in: float = 0.0, above_in: float = 0.0) -> dict:
     """Inches from each paper edge to the plot frame: dict(left, right, top, bottom).
 
     Standard layout with notes: MARGIN, moved by the printer edge (edge 0.5 in = MARGIN; 0.3 in = 0.2 in
@@ -1638,7 +1836,10 @@ def margins(settings: Settings, z_range: Optional[Tuple[float, float]] = None,
     labels, else a five-digit label is assumed; `types` is the legend (legend_entries).
 
     Standard layout, right side: MARGIN holds the vertical scale's top label up to "100 ft" (it then ends
-    exactly at the printer edge); a wider one ("1,000 ft") gets the room it needs, the same way."""
+    exactly at the printer edge); a wider one ("1,000 ft") gets the room it needs, the same way.
+
+    `above_in` (0.3.6, area_band_in: the band of bracket rows over the frame) adds to the top in either layout (the
+    end letters, BEND labels and titles stand above the band); 0: the arithmetic as before."""
     edge = edge_in(settings)
     out = {k: v + edge - SAFE_EDGE for k, v in MARGIN.items()}
     compact, notes = bool(settings.compact_layout), bool(settings.show_notes)
@@ -1659,6 +1860,11 @@ def margins(settings: Settings, z_range: Optional[Tuple[float, float]] = None,
         out["left"] = _up(left + LAYOUT_PAD_IN + edge)
         out["right"] = _up(right + LAYOUT_PAD_IN + edge)
         out["top"] = _up(compact_rows_in()[2] + LAYOUT_PAD_IN + edge)
+    if above_in > 0.0:
+        if compact:
+            out["top"] = _up(compact_rows_in()[2] + above_in + LAYOUT_PAD_IN + edge)
+        else:
+            out["top"] += above_in
     return out
 
 
@@ -1771,13 +1977,16 @@ def plan(model: SectionModel, settings: Settings) -> Plan:
     names = (["Custom 000.25 × 000.25 in"] if sheet == "custom"
              else [sheet_label(k, ls) for k in candidates for ls in (True, False)])
     blk = block(plot_w, names)
-    mg = margins(settings, (z0, z1), types, blk)
+    # (0.3.6) the band of bracket rows over the frame (polygon rows "Above the frame"): every sheet's top grows by it,
+    # so the sheet search, the tiling and the fill all see the taller top
+    above_in = area_band_in(model, settings, plot_length)
+    mg = margins(settings, (z0, z1), types, blk, above_in)
     fill = fill_mode(settings) if sheet != "custom" and settings.z_mode != "manual" else "off"
     fill_range = (z0, z1)
     if fill != "off":
         n = fill_majors(plot_h, max(SHEETS[k][0] for k in candidates), settings, v_major, mg)
         fill_range = (z0 - n * v_major, z1 + (n * v_major if fill == "both" else 0.0))
-        mg = margins(settings, fill_range, types, blk)
+        mg = margins(settings, fill_range, types, blk, above_in)
     need = _need(plot_w, plot_h, mg, min_page_w(settings, types))
 
     def filled(Hh, m=None):
@@ -1786,11 +1995,12 @@ def plan(model: SectionModel, settings: Settings) -> Plan:
     def result(pages, fits=True, message="", zz=(z0, z1)):
         zz0, zz1 = zz
         warnings = (manual_range_warnings(model, settings, zz0, zz1, v_major, plot_length)
+                    + area_warnings(model, settings, plot_length, zz1, v_major, zz0)
                     if settings.z_mode == "manual" else [])
         warnings += td_warnings(model, settings, zz0, plot_length, v_major, zz1)
         return Plan(z_min=zz0, z_max=zz1, plot_length=plot_length, h_major=h_major, h_minor=h_minor,
                     v_major=v_major, v_minor=v_minor, pages=pages, fits=fits, message=message,
-                    lowest_z=lowest, lowest_what=lowest_what, warnings=warnings)
+                    lowest_z=lowest, lowest_what=lowest_what, warnings=warnings, above_in=above_in)
 
     def one_page(W, H, name, zz):
         ph = (zz[1] - zz[0]) / V_s
@@ -1843,7 +2053,8 @@ def plan(model: SectionModel, settings: Settings) -> Plan:
             return None
         name = sheet_label(tile_key, landscape)
         # (each tile's notes wrap at its own plot width: the narrowest one sizes the block)
-        mg_t = margins(settings, fill_range, types, block(min((b - a) / H_s for a, b, _, _ in windows), [name]))
+        mg_t = margins(settings, fill_range, types, block(min((b - a) / H_s for a, b, _, _ in windows), [name]),
+                       above_in)
         if plot_h + mg_t["top"] + mg_t["bottom"] > Hh + _EPS:
             return None
         zz = filled(Hh, mg_t)

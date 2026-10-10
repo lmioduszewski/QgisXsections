@@ -29,6 +29,7 @@ from qgis.PyQt.QtWidgets import QToolButton  # noqa: E402
 from xsections.core.model import (LOOK_GRAY, NO_ATD, NO_TYPES, OTHER_POINT_DEFAULTS,  # noqa: E402
                                   POINT_LAYER_DEFAULTS)
 from xsections.core.symbology import read_styles  # noqa: E402
+from xsections.render.symbols import CHOICE_KEYS  # noqa: E402
 from xsections.ui import point_guess as G  # noqa: E402
 from xsections.ui import point_rows as R  # noqa: E402
 from xsections.ui import widgets as W  # noqa: E402
@@ -269,10 +270,12 @@ class Modules(unittest.TestCase):
 
     def test_no_cycle(self):
         """point_rows imports only qgis, core.model, core.symbology (0.3.4), core.explorations (0.3.5: text_number),
-        render.scales, ui.point_guess and ui.widgets; point_guess no Qt; neither imports ui.dock."""
+        core.others, render.scales, render.symbols, ui.point_guess, ui.widgets and ui.symbol_icons (0.3.6); point_guess
+        no Qt; neither imports ui.dock."""
         rows = self.imports("point_rows.py")
-        allowed = {"..core.model", "..core.symbology", "..core.explorations", "..render.scales", ".", ".widgets",
-                   "__future__", "copy", "collections", "typing"}
+        allowed = {"..core.model", "..core.symbology", "..core.explorations", "..core.others", "..render.scales",
+                   "..render.symbols", ".", ".widgets", ".symbol_icons", "__future__", "copy", "collections",
+                   "functools", "typing"}
         self.assertFalse([m for m in rows if not (m.startswith("qgis.") or m in allowed)], rows)
         self.assertNotIn(".dock", rows)
         guess = self.imports("point_guess.py")
@@ -314,25 +317,29 @@ class Modules(unittest.TestCase):
         self.assertEqual(e.currentField(), "Name")                       # 0.3.5: a number box keeps a text field
 
     def test_widget_additions(self):
-        self.assertEqual(W.ICONS["other"], '<circle cx="8" cy="8" r="4.2" fill="currentColor"/>')
+        self.assertEqual(W.ICONS["other"], '<circle cx="3.5" cy="3.5" r="2" fill="currentColor"/><path d="M8 2.5c1.5 '
+                                           '1.2 3 1.2 4.5 0" stroke="currentColor" stroke-width="1.3" fill="none"/>'
+                                           '<path d="M2 12.5V9.5h10v3" stroke="currentColor" stroke-width="1.3" '
+                                           'fill="none"/>')
         d = W.Disclosure("More")
         d.setText("Plotted explorations (1 of 2)")
         self.assertEqual(d.text(), "Plotted explorations (1 of 2)")
         seg = W.SegmentedControl([("Circle", "circle"), ("Square", "square")])
-        seg.setItemIcon(0, R._SHAPE_SVG.format(R.SHAPE_ICONS["circle"]))
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">{}</svg>'     # (0.3.5's shape icons)
+        seg.setItemIcon(0, svg.format('<circle cx="6" cy="6" r="4.2" fill="currentColor"/>'))
         b = seg.buttons()[0]
         self.assertEqual(b.toolButtonStyle(), Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.assertFalse(b.icon().isNull())
         self.assertEqual(b.accessibleName(), "Circle")
         self.assertEqual(seg.buttons()[1].toolButtonStyle(), Qt.ToolButtonStyle.ToolButtonTextOnly)
-        pm = W.svg_pixmap(R._SHAPE_SVG.format(R.SHAPE_ICONS["square"]), "#ff0000", 12)
+        pm = W.svg_pixmap(svg.format('<rect x="2" y="2" width="8" height="8" fill="currentColor"/>'), "#ff0000", 12)
         img = pm.toImage()
         self.assertEqual(img.pixelColor(img.width() // 2, img.height() // 2).name(), "#ff0000")
         box = W.field_box("Within", W._spin(0, 10, 1, 1), note="all layers")
         self.assertEqual(box.note.text(), "all layers")
         sheet = W.panel_stylesheet(W.theme_for(APP.palette()))
-        for name in ("xsPointList", "xsPointRow", "xsSubhead", "xsStyleBox", "xsNewBadge", "xsSubheadRow",
-                     "xsSubheadLabel", "xsRuleTop"):
+        for name in ("xsStyleBox", "xsMoreBody", "xsHint", "xsAdd", "xsCardButton", "xsCardPrimary", "xsSymbolList",
+                     "xsStatus"):
             self.assertIn(name, sheet)
 
     def test_swatches(self):
@@ -434,15 +441,17 @@ class Explorations(_Layers):
                          ("AESI_MapLabel", "ExploType_resolved", "ExploElev", "WellCompleteDepth", "GW_Elev_ATD",
                           "ExploDate", "elevation", False))
         self.assertEqual(row.stored(), v)
-        self.assertFalse(row.more_hint.isHidden())
-        self.assertEqual(row.more_hint.text(), "Guessed from the field names (check them): <b>AESI_MapLabel, "
-                                               "ExploType_resolved, ExploElev, WellCompleteDepth</b>; water "
-                                               "<b>GW_Elev_ATD</b> as ATD elevations.")
+        row.set_editor_open(True)                          # (0.3.6: the guess's hint is over the open row's tabs)
+        self.assertTrue(row.guess_hint.wanted())
+        self.assertEqual(row.guess_hint.text(), "Guessed from the field names (check them): <b>AESI_MapLabel, "
+                                                "ExploType_resolved, ExploElev, WellCompleteDepth</b>; water "
+                                                "<b>GW_Elev_ATD</b> as ATD elevations.")
         row.set_value(dict(layer_id=self.others.id()), guess_fields=True)
-        self.assertEqual(row.more_hint.text(), "This layer has no water-level or screen fields, so none are drawn "
-                                               "for it.")
+        self.assertEqual(row.water_hint.text(), "This layer has no water-level or screen fields, so none are drawn "
+                                                "for it.")
+        self.assertTrue(row.water_hint.wanted())
         row.set_value(point_row(self.supply, label_field="AESI_MapLabel", atd_field="GW_Elev_ATD"))
-        self.assertTrue(row.more_hint.isHidden())                         # nothing guessed now
+        self.assertFalse(row.guess_hint.wanted())                         # nothing guessed now
         # the GeoPackage layer: never its fid column `id`
         row.set_value(dict(layer_id=self.gpkg.id()), guess_fields=True)
         self.assertEqual([self.gpkg.fields().at(i).name() for i in self.gpkg.primaryKeyAttributes()], ["id"])
@@ -451,6 +460,8 @@ class Explorations(_Layers):
         self.assertNotIn("id", [v[k] for k in G.POINT_FIELD_KEYS])
 
     def test_look_and_swatch(self):
+        W.set_verbose(True)                                # (0.3.6: the look hint is a Verbose hint)
+        self.addCleanup(W.set_verbose, False)
         self.addCleanup(self.supply.setRenderer, self.supply.renderer().clone())
         self.supply.setRenderer(single_renderer("#00ff00"))
         row = R.ExplorationRow(point_row(self.supply, label_field="AESI_MapLabel"))
@@ -465,12 +476,12 @@ class Explorations(_Layers):
         self.assertEqual(row.value()["look"], "color")
         self.assertNotIn("color", row.value())
         self.assertEqual(row.swatch.colors(), ["#00ff00"])                   # the layer's single symbol
-        self.assertIn(" · color from the layer style · ", row.sub_label.text())
+        self.assertEqual(row.sub_label.text(), "AESI_MapLabel · all points · color")
         row.look_seg.setCurrentIndex(row.look_seg.findData("gray"))
         self.assertTrue(row.style_box.isHidden())
         self.assertFalse(row.look_hint.isHidden())
         self.assertEqual(row.swatch.color(), LOOK_GRAY)
-        self.assertIn(" · gray · ", row.sub_label.text())
+        self.assertEqual(row.sub_label.text(), "AESI_MapLabel · all points · gray")
         self.assertEqual(ch.n, 2)
         row.look_seg.setCurrentIndex(row.look_seg.findData("black"))
         self.assertEqual(row.swatch.colors(), ["#111111"])
@@ -481,9 +492,9 @@ class Explorations(_Layers):
         row = R.ExplorationRow(point_row(self.pts, label_field="ExploName", type_field="ExploType",
                                          types=["Boring", "CPT"]))
         self.assertEqual(row.name_label.text(), "Explorations")
-        self.assertEqual(row.sub_label.text(), "Explorations · ExploName · 2 of 4 types · –")
+        self.assertEqual(row.sub_label.text(), "ExploName · 2 of 4 types · black")
         row.set_counts(Counter({"Boring": 3, "CPT": 1}), left_off=1)
-        self.assertEqual(row.sub_label.text(), "Explorations · ExploName · 2 of 4 types · 4 plotted, 1 off")
+        self.assertEqual(row.sub_label.text(), "ExploName · 2 of 4 types · black")     # (0.3.6: no counts)
         self.assertEqual(row.type_list.item_for("Boring").text(1), "3 / 6")
         self.assertEqual(row.type_list.item_for("Test Pit").text(1), "0 / 1")
         row.set_counts(None)
@@ -492,9 +503,9 @@ class Explorations(_Layers):
         self.assertEqual(row.name_label.text(), "Ours")
         self.assertEqual(row.name_edit.placeholderText(), "Explorations")
         row.visible_box.setChecked(False)
-        self.assertTrue(row.sub_label.text().endswith(" · off"))
+        self.assertEqual(row.sub_label.text(), "ExploName · 2 of 4 types · black")     # (0.3.6: the tick says it)
         row.type_field.setField("")
-        self.assertIn(" · all points · ", row.sub_label.text())
+        self.assertEqual(row.sub_label.text(), "ExploName · all points · black")
         self.assertTrue(row.type_list.isEnabled() is False and row.btn_types_all.isEnabled() is False)
         self.assertEqual(row.value()["types"], [])
 
@@ -511,7 +522,7 @@ class Explorations(_Layers):
                          (self.supply.id(), "Mine", "AESI_MapLabel", "ExploType_resolved", [], "ExploElev",
                           "ExploDepth", False))
         self.assertEqual((ch.n, sw.args), (1, [(self.pts.id(), self.supply.id(), "Explorations")]))
-        self.assertTrue(row.more_hint.text().startswith("Guessed from the field names"))
+        self.assertTrue(row.guess_hint.text().startswith("Guessed from the field names"))
         self.assertEqual(row.stored(), v)
         row.layer_combo.setLayer(self.others)
         self.assertTrue(row.value()["in_range"])
@@ -552,6 +563,8 @@ class Explorations(_Layers):
         self.assertEqual(row.uses_layer_ids(), {self.pts.id(), self.table.id()})
 
     def test_shared_enabling(self):
+        W.set_verbose(True)                                # (0.3.6: the range hint is a Verbose hint)
+        self.addCleanup(W.set_verbose, False)
         row = R.ExplorationRow(point_row(self.pts, label_field="ExploName", depth_field="ExploDepth"))
         row.set_shared(False, "dem", False)
         for w in (row.bottom_elev_field, row.depth_field, row.top_field, row.screen_top_field, row.wl_field,
@@ -584,7 +597,7 @@ class Explorations(_Layers):
         try:
             self.assertTrue(row.is_missing())
             self.assertTrue(row.name_label.isWarn())
-            self.assertEqual(row.sub_label.text(), "layer not in the project · color from the layer style · off")
+            self.assertEqual(row.sub_label.text(), "layer not in the project · color")
             self.assertEqual(row.value(), d)
             self.assertEqual(row.uses_layer_ids(), {self.supply.id(), self.table.id()})
             row.name_edit.setText("Wells")
@@ -814,16 +827,14 @@ class Plotted(_Layers):
         pl.btn_show_all.click()
         self.assertEqual(sa.n, 1)
         self.assertEqual(pl.btn_show_all.toolTip(), "Plot every exploration you left off on this section")
-        self.assertEqual(pl.hint.text(), "Untick one to leave it off this section.")
+        self.assertEqual(pl.hint.text(), "Untick one to leave it off this section only.")
         pl.set_entries([])
         self.assertEqual(pl.text(), "Plotted explorations (0 of 0)")
         self.assertFalse(pl.empty_label.isHidden())
         self.assertEqual(pl.empty_label.text(), "Nothing chosen yet.")
         pl.set_entries(None)
         self.assertEqual(pl.text(), "Plotted explorations")
-        ex = Count(pl.expandedChanged)
-        pl.setExpanded(True)
-        self.assertEqual((ex.n, pl.isExpanded(), tg.n), (1, True, 1))
+        self.assertEqual(tg.n, 1)
         self.assertLessEqual(pl.tree.maximumHeight(), 210)
 
     @timing_test
@@ -902,7 +913,7 @@ class OtherPoints(_Layers):
                           v["elev"], v["elev_empty"]), ("Name", "", "Elev_ft", "asterisk", "#1f6fb2", 7.0, "line",
                                                         "line"))
         self.assertTrue(row.types_box.isHidden())
-        self.assertEqual(row.type_field.emptyText(), "(none: every point)")
+        self.assertEqual(row.type_field.emptyText(), "(none: every feature)")
         self.assertTrue(row.type_field.allowEmptyFieldName())
         self.assertEqual(row.swatch.shape(), "asterisk")
         self.assertEqual(row.uses_layer_ids(), {self.seeps.id()})
@@ -910,20 +921,18 @@ class OtherPoints(_Layers):
     def test_editor(self):
         row = R.OtherPointsRow(seep_row(self.seeps, name="Seeps", label_field="Name", elev_field="Elev_ft"))
         ch = Count(row.changed)
-        self.assertEqual([row.shape_seg.itemData(i) for i in range(row.shape_seg.count())],
-                         ["asterisk", "circle", "square", "diamond", "star", "triangle"])
-        tips = [b.toolTip() for b in row.shape_seg.buttons()]
-        self.assertEqual(tips, ["Asterisk (8 prongs)", "Circle", "Square", "Diamond", "Star", "Triangle"])
-        self.assertTrue(all(b.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
-                            for b in row.shape_seg.buttons()))
-        self.assertEqual([row.elev_seg.itemText(i) for i in range(3)], ["Ground line", "LIDAR at point",
-                                                                        "From a field"])
+        c = row.symbol_combo                               # (0.3.6: the drop-down replaces the six shape buttons)
+        symbols = [i for i in range(c.count()) if c.itemData(i)]
+        self.assertEqual([c.itemData(i) for i in symbols], list(CHOICE_KEYS))
+        self.assertTrue(all(c.itemData(i, Qt.ItemDataRole.ToolTipRole) for i in symbols))
+        self.assertTrue(all(not c.itemIcon(i).isNull() for i in symbols))
+        self.assertEqual([row.elev_seg.itemText(i) for i in range(3)], ["Ground line", "LIDAR", "Field"])
         self.assertEqual([b.toolTip() for b in row.empty_seg.buttons()],
                          ["On the ground line", "LIDAR at the point", "Leave the point off"])
         self.assertEqual((row.size_spin.minimum(), row.size_spin.maximum(), row.size_spin.singleStep(),
                           row.size_spin.suffix()), (3.0, 20.0, 0.5, " pt"))
         self.assertTrue(row.elev_field_row.isHidden())
-        self.assertEqual(row.sub_label.text(), "Seeps · on the ground line · –")
+        self.assertEqual(row.sub_label.text(), "points · Name · ground line")
         self.assertEqual(row.elev_hint.text(), "Each point sits on the ground line drawn along A–A′, just touching "
                                                "it. Choose LIDAR or a field to show its own elevation.")
         row.set_end_labels("B", "B′")
@@ -933,7 +942,7 @@ class OtherPoints(_Layers):
         self.assertEqual(row.elev_hint.text(), "The LIDAR at each point's own location, which can differ from the "
                                                "ground line drawn along B–B′. The centre of the symbol marks the "
                                                "elevation.")
-        self.assertEqual(row.sub_label.text(), "Seeps · LIDAR at the point · –")
+        self.assertEqual(row.sub_label.text(), "points · Name · LIDAR")
         row.elev_seg.setCurrentIndex(2)
         self.assertFalse(row.elev_field_row.isHidden())
         for i, (then, how) in enumerate((("sits on the ground line", "Elev_ft, else on the ground line"),
@@ -942,18 +951,21 @@ class OtherPoints(_Layers):
             row.empty_seg.setCurrentIndex(i)
             self.assertEqual(row.elev_hint.text(), "The centre of the symbol marks the elevation. Where Elev_ft is "
                                                    f"empty, the point {then}.")
-            self.assertEqual(row.sub_label.text(), f"Seeps · {how} · –")
+            self.assertEqual(row.how_text(), how)
+            self.assertEqual(row.sub_label.text(), "points · Name · Elev_ft")
         row.set_counts(Counter({"": 2}))
-        self.assertEqual(row.sub_label.text(), "Seeps · Elev_ft only · 2 plotted")
-        row.shape_seg.setCurrentIndex(4)
+        self.assertEqual(row.sub_label.text(), "points · Name · Elev_ft")       # (0.3.6: no counts)
+        i = c.findData("circle")
+        c.setCurrentIndex(i)
+        c.activated.emit(i)                                                    # his pick
         row.color_btn.setColor(QColor("#aa0000"))
-        self.assertEqual((row.swatch.shape(), row.swatch.color()), ("star", "#aa0000"))
+        self.assertEqual((row.swatch.shape(), row.swatch.color()), ("circle", "#aa0000"))
         row.type_field.setField("Type")
         self.assertFalse(row.types_box.isHidden())
         self.assertEqual(row.type_list.checked_types(), [])
         v = row.value()
         self.assertEqual((v["elev"], v["elev_empty"], v["shape"], v["color"], v["type_field"]),
-                         ("field", "off", "star", "#aa0000", "Type"))
+                         ("field", "off", "circle", "#aa0000", "Type"))
         self.assertEqual(ch.n, 7)
 
     def test_layer_removed(self):
@@ -980,6 +992,10 @@ class StyleBox(_Layers):
     switched off in QGIS, the foot; the header swatch; the Black / Gray hint."""
 
     HEAD = "From the layer's style in QGIS: "
+
+    def setUp(self):
+        W.set_verbose(True)                                # (0.3.6: the foot and the look hint are Verbose hints)
+        self.addCleanup(W.set_verbose, False)
 
     def styled(self, renderer, layer=None):
         """`layer` (default: the fixtures' explorations) drawn with `renderer` for this test."""
@@ -1120,9 +1136,8 @@ class StyleBox(_Layers):
     def test_hint_and_box_by_look(self):
         self.styled(categorized_renderer("ExploType", CUMBERLAND_AESI))
         row = R.ExplorationRow(point_row(self.pts, label_field="ExploName"))
-        self.assertEqual(row.look_hint.text(), "Black by default, like your own explorations. Gray sets this layer "
-                                               "apart; Color takes each exploration's color from this layer's style "
-                                               "in QGIS.")
+        self.assertEqual(row.look_hint.text(), "Black like your own explorations; Gray sets a layer apart; Color takes "
+                                               "each exploration’s color from the layer’s style in QGIS.")
         self.assertEqual([row.look_seg.itemText(i) for i in range(3)], ["Black", "Gray", "Color"])
         self.assertEqual([row.look_seg.buttons()[i].toolTip() for i in range(3)],
                          ["Black, like your own explorations", "Gray, to set this layer apart",

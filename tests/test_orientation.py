@@ -347,13 +347,16 @@ class Panel(unittest.TestCase):
         self.assertEqual((seg.currentData(), d.settings().orientation), ("auto", "auto"))     # the default
         box = seg.parentWidget()
         head = next(lab for lab in box.findChildren(QLabel) if lab.objectName() == "xsFieldLabel")
-        self.assertEqual(head.text(), "ORIENTATION")
-        # a row of its own, right under Sheet | Format, the full width of the section
-        lay = d.grp_export.body_layout
+        self.assertEqual(head.text(), "Orientation")
+        # a row of its own, right under Size | Format (0.3.6: in Scale & sheet › Sheet, Title after it), the full
+        # width of the section
         sheet_pair = d.sheet.parentWidget().parentWidget()
+        sub = sheet_pair.parentWidget()
+        self.assertEqual(sub.title(), "Sheet")
+        lay = sub.body_layout
         self.assertTrue(sheet_pair.isAncestorOf(d.fmt))
         self.assertEqual(lay.indexOf(box), lay.indexOf(sheet_pair) + 1)
-        self.assertEqual(lay.indexOf(d.z_mode.parentWidget().parentWidget()), lay.indexOf(box) + 1)
+        self.assertEqual(lay.indexOf(d.title_text.parentWidget()), lay.indexOf(box) + 1)
         for width in (340, 260):
             d.resize(width, 900)
             d.show()

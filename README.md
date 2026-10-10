@@ -27,15 +27,19 @@ and exports sheets you can measure with an engineer's scale and draw on by hand.
 - **Screens and water levels:** a bracket for each well screen; the measured water level as an open blue
   triangle joined to the middle of the screen; water seen at the time of drilling (ATD) as filled blue
   triangles, several per boring if you have them; optional elevation and date labels.
-- **Other points** such as seeps or springs: a symbol (a bold blue 8-pronged asterisk by default) with its
-  name, resting on the ground line, or at the LIDAR or an elevation from the attribute table.
+- **Other features** from point, line and polygon layers: seeps, springs, wells without a log, gauges or samples
+  as a **hydrogeologic symbol** (30 to choose from, each in its usual colour) with its name, resting on the ground
+  line or at the LIDAR or an elevation from the attribute table; **creeks and other lines** as a symbol wherever
+  the section line crosses them; a **project site, wetland or parcel** as a labelled **bracket** over the stretch
+  of the section that runs through it.
 - **Exact-scale PDF, PNG or SVG** with **separate horizontal and vertical scales**
   (for example 1 in = 100 ft H, 1 in = 10 ft V), a **major and minor grid** (green, gray or your own colours,
   widths and line styles) and graphic scales. Nothing is ever shrunk to fit.
 - **Letter and Tabloid tiling:** a long section is split across sheets with match lines. Sheets are
   landscape or portrait as fits best, or all one way if you choose.
-- A panel with live readouts, highlights on the map, and a **preview** you can zoom and read by hovering,
-  with the elevation of every surface under the mouse; the surfaces export to CSV.
+- A tidy panel (six sections, problems shown on the layer they concern, hints and readouts when you want them),
+  highlights on the map, and a **preview** you can zoom and read by hovering, with the elevation of every
+  surface under the mouse; the surfaces export to CSV.
 
 ### Requirements
 
@@ -68,32 +72,33 @@ The **XSections** button (a small ground profile with red ticks) is on the **Plu
    ground-only section) to a project in a projected CRS (for example WA State Plane South, US feet). If
    QGIS asks which transformation to use for a layer, accept the default.
 2. Click the **XSections** button. The panel opens with every section closed; the header of each says
-   what is set, and an amber one says what is still missing. Click a header to open it.
+   what is set, and an amber one says what is still missing. Click a header to open it (see *The panel*).
 3. **Line:** choose a line layer and feature, or click **Draw** (click the vertices, right-click to
-   finish). **⇄** (Reverse) swaps the ends; the end labels default to A and A′.
-4. **Surfaces:** the ground row holds the DEM (check *More: units and datum* for the **vertical datum**,
-   NAVD88 unless you change it; it is printed on the sheet). Add other rasters with **+ Add surface**.
+   finish). **⇄** (Reverse) swaps the ends; the end labels (*Ends*) default to A and A′.
+4. **Surfaces:** the *Ground* card holds the DEM (check *Units & datum* for the **vertical datum**,
+   NAVD88 unless you change it; it is printed on the sheet). Add other rasters with **+ Surface**.
 5. **Explorations:** one row per point layer (see *Several exploration layers* below). A new project gets
-   a row for each layer named like explorations, with its fields guessed from the field names; click a
-   row to check its label and type fields and tick the types to show, and **+ Add point layer** for
-   another. Set the tolerance (*Within*, ft), which every layer shares. **Plotted explorations** lists
-   what is on the section; untick one to leave it off.
-6. **Depths:** the line from top to bottom is on by default. The **Top elevation**, **Bottom elevation**
-   and **Total depth** fields are in each layer's row, under *More: depths, water and range* (guessed from
-   the field names; leave any of them empty if your table does not have it). Choose whether to **label
-   the total depth** (TD 50′). The readout says where each top and bottom came from.
-7. **Screens & water** (optional): screens and water levels on or off, and the label beside the symbol;
-   their fields are in each layer's row too (see below).
-8. **Other points** (optional): **+ Add point layer** for seeps, springs or other points (see below).
-9. **Scale & sheet:** set *Horizontal 1 in = … ft* and *Vertical 1 in = … ft*, choose the *Sheet* and its
-   **Orientation**: *Auto* (the default, as before 0.3.5) takes each sheet landscape when the section fits,
+   a row for each layer named like explorations, with its fields guessed from the field names (an amber
+   **check** badge on the row asks you to check them); click a row to open it, check its label and type fields
+   and tick the types to show, and **+ Add layer** for another. Set the tolerance (*Within*, ft), which every
+   layer shares. **Plotted** lists what is on the section; untick one to leave it off.
+6. **Depths** (in Explorations): the *Depth line* from top to bottom is on by default. The **Top elevation**,
+   **Bottom elevation** and **Total depth** fields are on each layer's **Depths** tab (guessed from the field
+   names; leave any of them empty if your table does not have it). Tick *TD label* to label the total depth
+   (TD 50′).
+7. **Water & screens** (in Explorations, optional): *Draw them* turns screens and water levels on or off, *Print
+   beside* sets the label beside the symbol; their fields are on each layer's **Water** tab (see below).
+8. **Other features** (optional): **+ Add layer** for seeps or springs (points), creeks (lines) or a site
+   (areas) (see below).
+9. **Scale & sheet:** set *Horizontal 1 in = … ft* and *Vertical 1 in = … ft*, choose the *Size* of the sheet and
+   its **Orientation**: *Auto* (the default, as before 0.3.5) takes each sheet landscape when the section fits,
    else portrait; *Landscape* or *Portrait* puts every sheet that way, tiled sheets too (a long section then
    tiles on portrait sheets). A custom page size is sized to the drawing, so Orientation is off for it. When
-   nothing fits, the message names the orientation and says when *Auto* or the other one would do. Check
-   the sheet and tile readout, then click **Export…** and choose PDF, PNG or SVG. *Sheet style* sets the
-   grid (Green, Gray or your own colours, widths and line styles), the depth line widths, printer edge, grid
-   fill, and whether bends get a dashed line (see *More room to draw*).
-   **⋯** next to Export has *Export points CSV…* and *Save line to layer*.
+   nothing fits, the message names the orientation and says when *Auto* or the other one would do. Then click
+   **Export…** and choose PDF, PNG or SVG. *Sheet style* sets the grid (Green, Gray or your own colours, widths
+   and line styles, and its spacing), the depth line widths, printer edge, grid fill, and whether bends get a
+   dashed line (see *More room to draw*).
+   **⋯** next to Export has *Export points CSV…*, *Save line to layer* and **Verbose** (see *The panel*).
 
 Settings are saved in the QGIS project; your own layers are only read, never edited. Projects saved
 with an earlier version keep their settings (0.1.x projects get no surfaces, screens or water levels until
@@ -101,7 +106,8 @@ you set them up; a project from 0.3.2 or earlier opens with its explorations lay
 the same fields, types and table of water levels, and looks exactly as before). A project that used *Data
 lines: By type* (0.3.3 and earlier) opens with those layers in *Color*, so their lines take the colours of
 the layer's own QGIS style instead of the plugin's type colours; a 0.3.3 layer drawn in a colour you picked
-is in *Color* from its layer style too.
+is in *Color* from its layer style too. A project from 0.3.5 opens with its Other points rows as point rows of
+*Other features*, drawn as before.
 **Save line to layer** puts a drawn line in a temporary layer: right-click it > *Make Permanent* to keep it.
 
 ### More room to draw (Sheet style)
@@ -122,18 +128,18 @@ the new defaults. Change any of them here.
   (the explanation of TD labels and label offsets always stays). Untick it for the standard layout: the title
   on two lines over the plot and the full notes under it (the space under the plot grows when long notes and
   a long legend need it, so they never run into the printer edge).
-- **Printer edge:** *0.5 in (any printer)*, the default, or *0.3 in (most laser printers)*: the clear strip
+- **Printer edge:** *0.5 in* (any printer), the default, or *0.3 in* (most laser printers): the clear strip
   kept at the paper edge; every margin moves with it (about 9.3 × 6.9 in of room on Letter landscape,
   compact). **0.3 in suits most laser printers:** most office laser printers print to within 0.25 in of the
   edge; inkjets and some copiers need more. To check yours, print a 0.3 in sheet at actual size: if any line,
   letter or number is cut off at the edge, use 0.5 in.
-- **Show notes under the section**, on by default: untick to leave the notes off (the grid, graphic scales,
-  axis labels and title stay). In the standard layout this frees about 1 in at the bottom.
-- **Fill the sheet with grid:** *Below the section* (the default), *Above and below* (the larger half below,
-  where the geology goes) or *Off*: adds whole major grid intervals (1 in with the default grid) to use the
-  sheet height. The first three options only make room; this one turns it into grid. Not used with a custom
-  page size, or when *Elevations* is *Manual*: the sheet then shows the range you typed (rounded to the major
-  grid).
+- **Notes**, on by default: untick to leave the notes under the section off (the grid, graphic scales, axis
+  labels and title stay). In the standard layout this frees about 1 in at the bottom.
+- **Fill sheet** (under *Grid*): *Below* the section (the default), *Both* above and below (the larger half
+  below, where the geology goes) or *Off*: adds whole major grid intervals (1 in with the default grid) to use the
+  sheet height, keeping *Below lowest* (in paper inches) of grid under the lowest point. The first three options
+  only make room; this one turns it into grid. Not used with a custom page size, or when *Elevations* is *Manual*:
+  the sheet then shows the range you typed (rounded to the major grid).
 
 Sheet style also sets how the grid and the depth lines look:
 
@@ -145,34 +151,69 @@ Sheet style also sets how the grid and the depth lines look:
   keeps your settings for when you come back. Dashes are the same length at every width: dashed 4 pt on,
   2 pt off; dotted 0.6 pt dots 1.6 pt apart, with round ends (a dotted line 1.6 pt or wider reads as solid).
   A custom grid is saved with the project only (a new project starts on Green), and the preview draws it
-  as the sheet does. The frame around the plot stays 0.9 pt black whatever the grid, and the spacing
-  (major lines every inch, minor every tenth with the automatic grid) is still set under *Scale & sheet*.
-- **Depth lines** (new in 0.3.4): the width of the lines from top to bottom, *Black and gray* (0.75 pt by
+  as the sheet does. The frame around the plot stays 0.9 pt black whatever the grid. **Spacing from the scale
+  (1 in, 0.1 in)** (on by default) puts the major lines every inch and the minor every tenth; untick it to type
+  the horizontal and vertical major and minor spacing in feet (since 0.3.6 here, no longer under *Scale & sheet*).
+- **Depth lines** (since 0.3.4): the width of the lines from top to bottom, *Black & gray* (0.75 pt by
   default, 0.25 to 3 pt) and *Color* (1.6 pt by default, so pale colours still show; 0.25 to 4 pt), in steps
   of 0.05 pt; **Reset** goes back to 0.75 and 1.6 pt. The bars at the bottom and the top follow the line,
   and the legend's swatches are drawn at the same widths. Which layers are black, gray or in color is set
-  for each layer, under *Explorations > Drawn in*. (With the line from top to bottom off, under *Depths*,
-  the widths are disabled.)
+  for each layer, under *Explorations > Drawn in*. (With *Depth line* off, under *Explorations > Depths*, the
+  widths are disabled.)
 
 ### The panel
 
-The sections follow the drawing from the top down: **Line**, **Surfaces**, **Explorations**, **Depths**,
-**Screens & water**, **Other points**, **Scale & sheet** and **Sheet style**. They are all closed when the
-panel opens; each header shows what is set (for example *A–A′ · 1,534 ft*, or *2 of 3 on · 46 plotted*)
-or, in amber, what is still missing (*Choose a DEM*, *Layer missing*). Open as many as you like. Settings
-you rarely change are under **More** inside their section.
+Six sections follow the drawing from the top down: **Line**, **Surfaces**, **Explorations** (its parts *Layers*,
+*All layers*, *Depths*, *Water & screens* and *Plotted*), **Other features**, **Scale & sheet** and **Sheet
+style**. They are all closed when the panel opens; each header shows what is set (for example *A–A′ · 1,534 ft*,
+or *2 of 3 on · 46 plotted*) or, in amber, what is still missing (*Choose a DEM*, *Layer missing*). Open as many
+as you like.
+
+- **What opens looks different from what it pushes down.** A closed section is a solid tile; an open one is a navy
+  bar over a framed body with a navy edge on its left. Inside, each part has a heading in navy capitals with a
+  small square and a thin rule; field names are small and plain above their fields.
+- **Layer rows are small cards** (in Surfaces, Explorations and Other features): click one to open it. An open
+  row joins its section: it becomes one light band reaching the section's left edge, which turns light blue
+  beside it and curves into it. The tick box beside a row leaves the layer off without losing its settings; its
+  **⋯** button moves it up or down or removes it.
+- Settings you rarely change fold under round buttons (*Units & datum*, *Checks*, *Distances & printers*) that open
+  a dashed box.
+- **Verbose** (the last item of the **⋯** menu next to Export, off by default) shows the hints and notes under the
+  controls: what a choice does, the readouts (length, where tops came from, what is plotted, the sheet). With it
+  off the panel shows only the controls; every explanation is in the tooltip of its control. XSections remembers
+  the choice for you (not in the project).
+- **Problems show whatever Verbose is.** When something is left off the sheet or changed on it (values that are
+  not numbers, points without an elevation, a layer no longer in the project, gaps in the DEM), its row gets one
+  short amber line and an amber badge with the count, and the section header an amber count (*2 layers need a
+  look*). When fields were only guessed from their names, the row shows just an amber **check** badge.
+- **Click a badge** for its card: what was found, on which layer and where it came from, each field or value, and
+  buttons. *Open Depths*, *Open Water* or *Open Layer* open the row on that tab; **Looks right** accepts the
+  guessed fields, and the badge goes for good (saved with the project). The card closes on a second click on the
+  badge, or as soon as the pointer has left the badge and the card.
+- The line under the panel says *Ready · 12 explorations, 3 points, 2 crossings, 1 area* when all is well, and
+  shows a warning in amber or an error in red.
+
+The panel follows your QGIS theme, light or dark (Night Mapping). Down to a 260 px panel every field and label
+stays whole: side-by-side fields go one over the other where they no longer fit.
 
 ### Several exploration layers
 
 **Explorations** is a list of point layers: your own explorations, explorations by others, supply wells,
 and so on (where their lines cross, the first row is drawn on top). A new project gets a row for each
 layer named like explorations (up to six; supply wells last, and unticked: tick them on when you want
-them), with every field guessed from the field names (never the GeoPackage `id` column). **+ Add point
-layer** adds a row. The tick box beside a row leaves the layer off without losing its settings; its **⋯**
-button moves it up or down or removes it. The header shows the legend name and a summary (layer · label
-field · types · how many are plotted). Click a row's name to set it up:
+them), with every field guessed from the field names (never the GeoPackage `id` column). **+ Add layer**
+adds a row. The tick box beside a row leaves the layer off without losing its settings; its **⋯** button moves
+it up or down or removes it. The row shows the legend name and a summary (label field · types · black, gray or
+color). Click a row to set it up, on three tabs: **Layer** (the layer, legend, look, label, type and types),
+**Depths** (top, bottom, total depth, *In elevation range*) and **Water** (water levels, screens and the table of
+water levels; the tab is grayed when the layer has no such fields).
 
-- **Layer** and a **Legend name** (the layer name if left empty).
+Fields guessed from their names (a new row, or a layer newly chosen in a row) put an amber **check** badge on the
+row until you look at them: click it for the card listing each guessed box and its field, *Open Depths* or *Open
+Water* to see them in place, and **Looks right** to accept them (the badge then goes for good, saved with the
+project). Choosing a field yourself in a guessed box takes it off the list too.
+
+- **Layer** and a **Legend** name (the layer name if left empty).
 - **Drawn in:** *Black* (the default, like your own explorations), *Gray* to set a layer apart (its depth
   lines, ticks, names and TDs in gray), or *Color*: each exploration takes its color from the layer's own
   style in QGIS (*Layer Properties > Symbology*), whatever it is (one symbol, categories, ranges or rules,
@@ -190,71 +231,105 @@ field · types · how many are plotted). Click a row's name to set it up:
   share in the same colour, as your own and others' explorations in one style, is listed once); *Black* and
   *Gray* layers are listed by name only when the layers are drawn differently from each other. Screens and
   water-level triangles look the same in every layer.
-- **Label field**, **Type field** and the **Types** to plot, each with *plotted / in the layer*;
+- **Label**, **Type** (the fields) and the **Types** to plot, each with *plotted / in the layer*;
   **(no value)** is the explorations whose type is empty. *All* · *None* tick or untick them all.
-- **More: depths, water and range:** the top elevation, bottom elevation and total depth fields, with
-  *In elevation range* beside the total depth; the measured level and its date, the ATD level and its date,
-  *Levels are* Elevations | Depths, the screen top and bottom, *Screens are* Elevations | Depths, and
-  *Water levels from a table (CSV, Excel…)* (see *Screens and water levels*).
-  A note says which fields were guessed, so you can check them. The number boxes list number fields and text
-  fields (a CSV added to QGIS has only text fields; the box's icons show which is which): see *Numbers stored
-  as text* below.
+- **Depths tab:** the top elevation, bottom elevation and total depth fields, with *In elevation range* beside
+  the total depth. **Water tab:** the measured level and its date, the ATD level and its date, the screen top
+  and bottom, *Levels are* Elevations | Depths, *Screens are* Elevations | Depths, and *Water levels from a table
+  (CSV, Excel…)* (see *Screens and water levels*). The number boxes list number fields and text fields (a CSV
+  added to QGIS has only text fields; the box's icons show which is which): see *Numbers stored as text* below.
 - **In elevation range** (beside *Total depth*): on for your explorations; off to begin with for supply
   wells (a layer named "supply", or with a *WellCompleteDepth* field). A layer left out never makes the
   sheet taller: its explorations that reach below the bottom of the frame stop there with a small arrow, and
   their TD beside it (shown even with TD labels off: it is the only depth on the sheet); shorter ones are
   drawn whole, their TD under the bar or, where that is crowded, beside the line (or left out, with a note,
-  when even that would cover another label). The Explorations readout names them, in amber (*HW-1 runs below
-  the frame (TD 254′)*), and says when one's screen or water level is below the frame, where it is not
+  when even that would cover another label). With *Verbose* on, the Explorations readout names them (*HW-1 runs
+  below the frame (TD 254′)*), and says when one's screen or water level is below the frame, where it is not
   drawn, also for a well drawn without a line down there (*SW-1: water level below the frame*). The legend
   and the notes list only the levels and screens that are drawn.
 
-Shared by every layer: the *Within* distance, *Labels* and *Label text*, the top rule (*Top from* and its
-25 ft check), *Treat 0 as missing*, TD labels, screens and water levels on or off, and the water-level
-label. Dates stored as numbers (milliseconds since 1970, as some GeoPackages keep them) are shown as dates.
+Shared by every layer (*All layers*, *Depths* and *Water & screens* under Explorations): the *Within* distance,
+*Labels* and *Label text*, the top rule (*Tops from* and, under *Checks*, its 25 ft check), *0 means missing*,
+*TD label*, screens and water levels on or off (*Draw them*), and the water-level label (*Print beside*). Dates
+stored as numbers (milliseconds since 1970, as some GeoPackages keep them) are shown as dates.
 With *Label text* set to *Name + offset and direction*, each exploration (and each other point) is labelled
 with how far and which way it was projected onto the section line: a well 40 ft north of an east-west line reads
 *MW-3 · 40 ft S* (projected 40 ft south onto the line; before 0.3.5 the direction pointed from the line to the
 well, *N*). An exploration on the line reads *0 ft*, with no direction.
-A row whose layer is no longer in the project turns amber and keeps every setting it had; the section
-waits until you choose the layer again, untick the row or remove it. The same layer added again under its
+A row whose layer is no longer in the project turns amber (*Layer not in the project*) and keeps every setting it
+had; the section waits until you choose the layer again, untick the row or remove it. The same layer added again under its
 name is taken back by itself, with everything you set (also when the project was opened while the file was
 moved or offline).
 
 ### Plotted explorations
 
 Everything the rows choose is plotted, even two explorations of different layers a foot apart.
-**Plotted explorations (N of M, K left off by you)**, under the rows, lists them by layer, in order along
-the line, each with its distance and offset (*300 ft · 40 ft L*). **Untick one to leave it off this
+**Plotted**, the last part of Explorations, lists them by layer, in order along the line, each with its distance
+and offset (*300 ft · 40 ft L*); its heading's tooltip says how many (*N of M, K left off by you*). **Untick one to leave it off this
 section:** the sheet, the points CSV and the map highlights leave it out. What you leave off is saved with
 the project for that section line (another line has its own; *Reverse* and *Save line to layer* keep it;
 so does removing a layer, of explorations or of section lines, and adding it again under the same name),
 and it stays left off when the list is rebuilt, as long as the exploration is still chosen. **Show all**
 plots them all again.
 
-### Other points
+### Other features
 
-**Other points** draws point layers of other features, such as seeps or springs, as a symbol with its name
-above it. **+ Add point layer** adds a row (a new project gets one for each layer named like seeps or
-springs). Points are chosen by the same *Within* distance as the explorations. A row has the layer, a
-legend name, the label field, an optional type field (*none*: every point) with its types, and:
+**Other features** (called *Other points* before 0.3.6; your rows open unchanged) draws layers of other things
+you want on the section: **points** such as seeps, springs or wells without a log, **lines** such as creeks, and
+**areas** (polygons) such as a project site, a wetland or a parcel. **+ Add layer** adds a row for a point, line or
+polygon layer (a new project gets one for each point layer named like seeps or springs). Each row shows its kind's
+mark and a summary (*points · Name · ground line*, *lines · Name · 2 crossings*, *areas · Name · bracket in the
+frame*). A row has the layer, a **Legend** name, the **Label** field, an optional **Type** field (*none*: every
+feature) with its types, and, by its kind:
 
-- **Symbol:** asterisk (8 prongs, the default), circle, square, diamond, star or triangle; its **colour**
-  (blue by default) and **size** (7 pt).
+**Points** are chosen by the same *Within* distance as the explorations; **lines** are drawn only where the section
+line crosses them (no distance: one symbol at each crossing, a creek that crosses twice gets two; where a line runs
+along the section line for a stretch, one symbol in the middle of it, shown on the row). Both have:
+
+- **Symbol:** a list in five groups, each symbol with its picture and its name, and a description in its tooltip:
+  *Water at the surface* (spring, thermal or mineral spring, stream or creek crossing, pond, lake or reservoir,
+  wetland), *Wells shown as points (no log)* (water well, domestic, public supply, irrigation, industrial,
+  monitoring or piezometer, observation, pumping or extraction, flowing artesian, drywell or injection (UIC),
+  unused, decommissioned, infiltration gallery), *Measurements and samples* (stream or lake gauge, staff gauge,
+  water-quality site, soil, sediment or rock sample), *Geology and survey* (bedrock outcrop, landslide head scarp,
+  survey benchmark) and *General shapes* (asterisk, circle, square, diamond, triangle). The symbols follow the
+  USGS / FGDC geologic map standard where it has one. **Choosing a symbol sets its usual colour** (water blue, wells
+  black, pumping wells, landslides and samples red, water quality green, outcrops gray); change the **Color** after
+  if you like, and the **Size** (7 pt). A new point row starts with the bold blue asterisk, a new line row with the
+  stream crossing. A spring's tail points downhill by itself; the survey benchmark's centre marks its elevation.
+  Well symbols are for wells without a log: wells with depths belong in Explorations. A row from an older version
+  with the star keeps it (it is no longer offered).
 - **Elevation:** *Ground line* (the default: the symbol sits on the drawn ground line, just touching it,
-  on a slope too), *LIDAR at point* (the LIDAR at the point's own location, which can differ from the
+  on a slope too), *LIDAR* (points only: the LIDAR at the point's own location, which can differ from the
   ground line drawn along the section; the centre of the symbol marks it, with a dotted line down from the
-  ground line when it is below it), or *From a field* (an elevation in feet; the centre marks it).
-  **Where it is empty:** *Line* (on the ground line), *LIDAR* or *Off* (left off, and listed). An
-  elevation more than 25 ft from LIDAR is drawn and listed.
+  ground line when it is below it), or *Field* (an elevation in feet; the centre marks it).
+  **Where empty:** *Line* (on the ground line), *LIDAR* (points) or *Off* (left off, and shown on the row). An
+  elevation more than 25 ft from LIDAR is drawn and shown on the row.
 
-The labels are always horizontal and follow *Label text*; they keep clear of the ground line (on a slope
-too), of the exploration names and of the other symbols, rising with a leader when they must, and where the
-leaders of exploration names run through one, the name is set on white. With a manual elevation range, a
-point the range cuts off is left out with its name (the note under the panel says which). Other points are
-listed in the legend and the notes and ringed on the map with the explorations; they are not in the points
-CSV. A row whose layer is
-gone is left out with a note (amber), as a missing surface is; the section is still drawn.
+**Areas** are drawn as a **bracket** over each stretch of the section line that runs through one: a line with a
+tick at each end and its label (the label field, else the legend name) centred above it, in the row's colour. The
+section leaving and entering an area again gives two brackets, each labelled. Brackets that overlap stack, the
+longer one on top; an area that goes on past A or A′ ends in an open arrow and reads *(continues)*. A row has:
+
+- **Bracket:** *In the frame* (the default: above the ground and above the exploration names under it; with *Auto*
+  elevations the sheet gets the room) or *Above the frame* (a row over the frame; the top margin grows by a row for
+  each level of stacking, and the end letters and title move up).
+- **Edge lines:** *Off* (the default), or dashed lines at the ends of each bracket *To ground* or *Full height* of
+  the frame.
+- **Color** (purple by default) and **Line:** *Solid* or *Dashed*.
+
+With a manual elevation range that leaves brackets no room, they are lowered under the top of the frame and the
+message names them, with the maximum that would hold them.
+
+The labels of points and crossings are always horizontal and follow *Label text* (a crossing reads its name only);
+they keep clear of the ground line (on a slope too), of the exploration names and of the other symbols, rising
+with a leader when they must, and where the leaders of exploration names run through one, the name is set on
+white. With a manual elevation range, a point the range cuts off is left out with its name (the line under the
+panel says which). Points, crossings and
+areas are listed in the legend (an area by a small bracket); points and crossings are in the notes and ringed on
+the map with the explorations, and the preview's hover reads them. None of them are in the points CSV. A row
+whose layer is gone is left out and its row says so (amber), as a missing surface is; the section is still
+drawn.
 
 ### The preview: hover, zoom and Surfaces CSV
 
@@ -290,9 +365,9 @@ The preview at the bottom of the window shows the whole section as it will print
 
 ### Other surfaces
 
-Under **Surfaces**, the ground (your LIDAR DEM) is always the first line. **+ Add surface** adds another
-raster: a water-level surface, a MODFLOW layer top or bottom, anything with elevations. Click a surface's
-name to set it up:
+Under **Surfaces**, the ground (your LIDAR DEM, the *Ground* card) is always the first line. **+ Surface** adds
+another raster: a water-level surface, a MODFLOW layer top or bottom, anything with elevations. Click a surface
+to set it up:
 
 - **Raster** and **band**, a **name** for the legend (the layer name if left empty), and its **colour**
   (the swatch), **line** style (solid, dash, dot) and width.
@@ -305,14 +380,14 @@ name to set it up:
   explorations).
 - **Units:** as for the DEM (*Auto* reads them from the layer).
 
-**+ Add all bands…** adds one surface per band of a multi-band raster. The tick box beside a surface hides
+**+ Bands…** adds one surface per band of a multi-band raster. The tick box beside a surface hides
 it without losing its settings; the **⋯** button moves it up or down or removes it. A surface whose raster
-is missing is left out with a note; it never stops the section. Surfaces are listed in the legend and the
-notes.
+is missing is left out and its row says so (amber); it never stops the section. Surfaces are listed in the
+legend and the notes.
 
 ### MODFLOW 6 surfaces
 
-Under **Surfaces**, **+ Add MODFLOW 6…** reads a MODFLOW 6 model straight from its run folder (no flopy or
+Under **Surfaces**, **+ MODFLOW 6…** reads a MODFLOW 6 model straight from its run folder (no flopy or
 other installs needed). Pick the folder (or a name, grid or head file); the dialog shows the model's grid (DISV,
 DIS or DISU), layers, units and saved head times. Tick what to draw:
 
@@ -328,8 +403,8 @@ Elevations are converted from the model's LENGTH_UNITS.
 
 ### Screens and water levels
 
-**Screens & water** turns screens and water levels on or off and sets the label beside the symbol. The
-fields are chosen for each layer, in its row under **Explorations** (*More: depths, water and range*):
+**Explorations > Water & screens** turns screens and water levels on or off (*Draw them*) and sets the label
+beside the symbol (*Print beside*). The fields are chosen for each layer, on its row's **Water** tab:
 
 - **Screen top** and **Screen bottom** fields, as **depths** below the exploration's top (the same top the
   depth line uses) or as **elevations** (*Screens are*). The screen is drawn as a bracket just left of the
@@ -341,8 +416,8 @@ fields are chosen for each layer, in its row under **Explorations** (*More: dept
   runs out to the left and up (or down) to the level. Without a screen it sits just left of the exploration line.
 - **Water level (ATD)** and its date: water seen at the time of drilling. Drawn as a
   filled blue triangle just left of the exploration line.
-- **Print beside the symbol** (in Screens & water, for every layer): off, the elevation (*652.8*), or the
-  elevation and date (*652.8 (6/12/2025)*).
+- **Print beside** (in Water & screens, for every layer): *Off*, the elevation (*Elev.*: *652.8*), or the
+  elevation and date (*+ date*: *652.8 (6/12/2025)*).
 - **Water levels from a table (CSV, Excel…)** for several levels per exploration (more than one
   water-bearing zone): a spreadsheet-style table of water levels with one row per reading (a CSV or Excel
   sheet added to QGIS works; it needs no geometry), with the exploration name, the water level, and
@@ -354,25 +429,25 @@ fields are chosen for each layer, in its row under **Explorations** (*More: dept
 
 **Numbers stored as text.** A CSV opened in QGIS reads every column as text (unless a `.csvt` file next to it
 gives the column types), so every number box (top, bottom, depth, screens, levels, the table's water level, an
-Other points elevation field) also lists text fields. A text is read as a number when it is a plain number,
+Other features elevation field) also lists text fields. A text is read as a number when it is a plain number,
 spaces around it ignored (*642.3*, *-12.5*, *1e3*, and *1,234.5* with commas). An empty cell is no value. Anything else
-(*NA*, *dry*, *642.3 ft*) is left out, as an empty value is, and listed in the panel: for the table of water levels
-once per field (*Boring Summary: 3 water levels in GW Elev. (ft) are not numbers (left out).*), for an
-exploration's own fields beside its name (*B-4: DTW “dry” is not a number: left out*); an Other point with such
-an elevation is placed as for an empty one.
+(*NA*, *dry*, *642.3 ft*) is left out, as an empty value is, and shown on the layer's row: for the table of water
+levels *3 water levels are not numbers; left out*, its card listing the explorations and their values (*B-4
+"dry"*); for an exploration's own fields its name and the value (*B-4: DTW “dry” is not a number: left out*); an
+Other features point with such an elevation is placed as for an empty one.
 
 A screen or water level that cannot be right (entirely above the top or below the bottom of its
-exploration) is left out and listed in the panel: check the *Elevations / Depths* switches, since such a value
+exploration) is left out and shown on its row: check the *Elevations / Depths* switches, since such a value
 was most likely entered as the other kind.
 
 ### Tops, bottoms and total depth
 
 Each exploration is worked out on its own, from the best data it has:
 
-- **Top:** the *Top elevation* field where it has a value (not empty, and not 0 while *Treat 0 as
-  missing* is ticked) that is within 25 ft of LIDAR; otherwise **LIDAR at the exploration** itself.
-  A table value that LIDAR contradicts is listed in the panel (for example "ExploElev 205.6 ft ignored:
-  469.0 ft from LIDAR"). *Top from* can also use LIDAR only, or the table only.
+- **Top:** the *Top elevation* field where it has a value (not empty, and not 0 while *0 means missing*
+  is ticked) that is within 25 ft of LIDAR; otherwise **LIDAR at the exploration** itself.
+  A table value that LIDAR contradicts is shown on its row (for example "ExploElev 205.6 ft ignored:
+  469.0 ft from LIDAR"). *Tops from* can also use LIDAR only, or the table only.
 - **Bottom:** the *Bottom elevation* field where it has a value below the top; otherwise the **top minus
   the total depth**. A bottom elevation at or above the top is ignored and listed. When the table's
   top is used, its bottom elevation is used too; if it is more than 5 ft from top − depth it is listed
@@ -425,9 +500,11 @@ The design and the drawing spec are in [docs/DESIGN.md](docs/DESIGN.md).
 ```
 xsections/          the plugin folder (what the zip contains)
   core/             geometry and data: units, DEM sampling, projecting explorations and other points,
-                    build_section
-  render/           sheets: page planning, drawing, PDF/PNG/SVG export, PDF print preferences
-  ui/               the dock, map tools, preview, map highlights, settings storage
+                    crossings and areas of line and polygon layers, build_section
+  render/           sheets: page planning, drawing, the symbol catalogue, PDF/PNG/SVG export, PDF print
+                    preferences
+  ui/               the dock, its rows and widgets, problems, symbol icons, map tools, preview, map highlights,
+                    settings storage
 tests/              unittest suite (headless) and pixel measurement helpers
 scripts/            run_tests_parallel.bat/.py, run_tests.bat, package.py/.bat, install_dev.bat,
                     uninstall_dev.bat
@@ -454,8 +531,17 @@ included). At the end every listed test must have started in a worker, or the ru
 lists every worker (with its exit status) and module with its time and each failure with its traceback, and ends like
 unittest's: `Ran N tests in X s`, then `OK` or `FAILED (...)` (exit status 0 only when everything passed). A worker
 passes only when its exit status is the one unittest gives for what it printed: one that prints `OK` and then
-crashes (say while QGIS shuts down) fails the run as a crashed worker. Tests with a time limit (the budgets) stretch
-their limits and waits by `XSECTIONS_TIME_FACTOR`, which the parallel runner sets to 3 (1 everywhere else, so a
+crashes (say while QGIS shuts down) fails the run as a crashed worker. A worker that has printed its result but
+whose process never finishes ending (Windows once left one stuck in its tear-down, its output open) is not waited
+for: after 30 s of silence (times the time factor) its exit status is read without waiting and used (the summary
+notes it); if it has none 60 s later, it is killed and the run fails (`hung workers=1`, with its log and PID). A
+worker is never waited for without end either: one that exits without printing a result while another process holds
+its output counts as crashed once nothing has come for 30 s (times the time factor), and any worker (and the serial
+re-run) still running four times its planned time after its start, at least 15 minutes (times the time factor), is
+killed and fails the run (`timed out workers=1`, with its log and PID). Nor is the listing process: its list is used
+once it has come whole (with a note if the process then does not end), and it is given up after 300 s. The temp
+folders of a process that has not ended are left in place, and the summary lists them. Tests with a time limit
+(the budgets) stretch their limits and waits by `XSECTIONS_TIME_FACTOR`, which the parallel runner sets to 3 (1 everywhere else, so a
 serial run checks them exactly as written); they are tagged `@timing_test` in the source. When several processes
 ran, every test that failed is run once more, alone, at the end, and both results are shown: a timing test that
 passes alone counts as passed, any other failure stands. A run in one process (`--serial`, `--workers 1` or a single

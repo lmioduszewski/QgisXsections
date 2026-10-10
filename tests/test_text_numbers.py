@@ -697,7 +697,7 @@ class TableTexts(_Project):
                          "per water-level reading: the exploration's name, the level, and optionally its date and kind "
                          "(measured or ATD).")
         head = field_head(row.wl_table)
-        self.assertEqual(head.text(), "WATER LEVELS FROM A TABLE (CSV, EXCEL…)")
+        self.assertEqual(head.text(), "Water levels from a table (CSV, Excel…)")
         self.assertEqual(row.wl_values.toolTip(), "Applies to the measured and ATD fields and to the table of water "
                                                   "levels")
         self.assertEqual(row.in_range_box.text(), "In elevation range")
@@ -713,6 +713,8 @@ class TableTexts(_Project):
         aligned, shown whole; its hint follows the pair; the table's label fits the editor's width."""
         from tests.test_ui import make_iface
         from xsections.ui.dock import XSectionsDock
+        W.set_verbose(True)                                # (0.3.6: the range hint is a Verbose hint)
+        self.addCleanup(W.set_verbose, False)
         d = XSectionsDock(make_iface(), None)
         try:
             d.restore_from_project()
@@ -721,7 +723,7 @@ class TableTexts(_Project):
             d.grp_explo.setCollapsed(False)
             row = d.explo_rows[0]
             row.set_editor_open(True)
-            row.more.setExpanded(True)
+            row.show_tab("depths")
             row.in_range_box.setChecked(False)
             APP.processEvents()
             box, depth, pair_w = row.in_range_box, row.depth_field, row.depth_pair
@@ -739,12 +741,13 @@ class TableTexts(_Project):
             self.assertEqual(by1, dy1)                                        # bottoms aligned
             self.assertGreaterEqual(box.width(), box.sizeHint().width(), (box.width(), box.sizeHint().width()))
             self.assertLessEqual(box.sizeHint().width(), pair_w.width() // 2 - 4)
-            lay = row.more.body_layout
+            lay = row.pane_depths.layout()
             self.assertEqual(lay.indexOf(row.range_hint), lay.indexOf(pair_w) + 1)   # the hint follows the pair
             self.assertTrue(row.range_hint.isVisible())
             self.assertGreater(rect(row.range_hint)[1], by1)
-            self.assertLess(rect(row.range_hint)[3], rect(row.water_head)[1])
             self.assertEqual(lay.indexOf(box), -1)                          # (no longer under the table)
+            row.show_tab("water")                                           # (0.3.6: the table is on the Water tab)
+            APP.processEvents()
             head = field_head(row.wl_table)
             self.assertTrue(head.isVisible())
             self.assertLessEqual(head.fontMetrics().horizontalAdvance(head.text()), head.contentsRect().width(),
@@ -752,13 +755,22 @@ class TableTexts(_Project):
             self.assertGreaterEqual(head.width(), row.wl_table.width() - 1)
             self.assertFalse(d.scroll.horizontalScrollBar().isVisible())
             self.assertEqual(box.text(), "In elevation range")
-            # the narrowest panel (260 px): "In range", whole, the tooltip unchanged; back at 340 px the whole text
+            # the narrowest panel (260 px): whole (0.3.6: the editor's margins are the mockup's 9 px, not 28, so the
+            # whole text fits there now); narrower than its text, "In range", whole, the tooltip unchanged; back at
+            # 340 px the whole text
+            row.show_tab("depths")
             d.resize(260, 900)
             APP.processEvents()
+            self.assertEqual(box.text(), "In elevation range")
+            self.assertGreaterEqual(box.width(), box.sizeHint().width(), (box.width(), box.sizeHint().width()))
+            box.resize(box.sizeHint().width() - 1, box.height())
             self.assertEqual(box.text(), "In range")
             self.assertGreaterEqual(box.width(), box.sizeHint().width(), (box.width(), box.sizeHint().width()))
             self.assertTrue(box.toolTip().startswith("Include this layer's explorations"))
+            row.show_tab("water")
+            APP.processEvents()
             self.assertLessEqual(head.fontMetrics().horizontalAdvance(head.text()), head.contentsRect().width())
+            row.show_tab("depths")
             d.resize(340, 900)
             APP.processEvents()
             self.assertEqual(box.text(), "In elevation range")

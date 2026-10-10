@@ -1,7 +1,9 @@
 """Field guesses for the point-layer rows of the panel (0.3.3): pure Python, no Qt widgets.
 
 A row's fields are guessed from the field names when a layer is added to a row (and again for the fields a new layer
-in a row lacks); the rows then show the guess for the user to check (ui.point_rows). Rules:
+in a row lacks); the rows then show the guess for the user to check (ui.point_rows; 0.3.6: guess_point_fields also
+gives the keys it guessed, which an exploration row keeps as `guessed`, its "check" badge, until he checks them, and
+guess_hint the sentence for them). Rules:
 - whole names, matched case-insensitively and ignoring spaces and punctuation (_ - . # ...) and a trailing unit in
   parentheses ("GW Elev. (ft)" is GW_Elev; never a part of a name: "botqvr" is not a bottom elevation); the first
   name of a list that the layer has wins;
@@ -64,6 +66,9 @@ SUPPLY_FIELD = "WellCompleteDepth"      # ... and so does a layer with this fiel
 # the field keys guess_point_row returns, in POINT_LAYER_DEFAULTS order
 POINT_FIELD_KEYS = ("label_field", "type_field", "top_field", "bottom_elev_field", "depth_field", "screen_top_field",
                     "screen_bottom_field", "wl_values", "wl_field", "wl_date_field", "atd_field", "atd_date_field")
+# the boxes a guess may fill, in row order: core.model.GUESS_KEYS (a row's `guessed`, 0.3.6; spelled out here, so this
+# module stays free of the package's imports)
+GUESS_KEYS = tuple(k for k in POINT_FIELD_KEYS if k != "wl_values")
 TABLE_FIELD_KEYS = ("wl_table_name_field", "wl_table_elev_field", "wl_table_date_field", "wl_table_kind_field")
 OTHER_FIELD_KEYS = ("label_field", "type_field", "elev_field")
 
@@ -188,7 +193,14 @@ def guess_point_row(fields: Fields, pk: Set[str], layer_name: str, saved: Option
     names (check them): ..." ("" when nothing was guessed). `saved`: the row's stored keys (None: a new row, every
     box guessed); a saved empty optional field stays empty unless `guess_fields`. `text_ok`: the text fields whose
     values are numbers (pick_field). `layer_name` is not used by the field rules (the elevation-range guess is
-    guess_in_range)."""
+    guess_in_range). (0.3.6: guess_point_fields also says which boxes were guessed.)"""
+    return guess_point_fields(fields, pk, layer_name, saved=saved, guess_fields=guess_fields, text_ok=text_ok)[:2]
+
+
+def guess_point_fields(fields: Fields, pk: Set[str], layer_name: str, saved: Optional[dict] = None,
+                       guess_fields: bool = True, text_ok: TextOk = None) -> Tuple[dict, str, List[str]]:
+    """guess_point_row's (field keys, hint) and the keys of the boxes it guessed from the field names (0.3.6: a row's
+    `guessed`, its "check" badge), those whose field is not empty, in GUESS_KEYS order."""
     keep = saved is not None and not guess_fields
     saved = saved or {}
     pk = set(pk or ())
@@ -232,26 +244,40 @@ def guess_point_row(fields: Fields, pk: Set[str], layer_name: str, saved: Option
             got[date_key], guessed[date_key] = (name if name in every else ""), False
     got["wl_values"] = wl_values
 
-    hint = ""
-    if any(guessed.values()):
-        main = [got[k] for k in ("label_field", "type_field", "top_field", "bottom_elev_field", "depth_field")
-                if guessed[k]]
-        parts = [f"<b>{_esc(', '.join(main))}</b>"] if main else []
-        screens = [got[k] for k in ("screen_top_field", "screen_bottom_field") if guessed[k]]
-        if screens:
-            parts.append(f"screens <b>{_esc(', '.join(screens))}</b>")
-        water = []
-        if guessed["wl_field"]:
-            text = f"water <b>{_esc(got['wl_field'])}</b> as measured {_plural(wl_values)}"
-            if guessed["wl_date_field"]:
-                text += f" dated by {_esc(got['wl_date_field'])}"
-            water.append(text)
-        if guessed["atd_field"]:
-            water.append(f"ATD <b>{_esc(got['atd_field'])}</b>" if water
-                         else f"water <b>{_esc(got['atd_field'])}</b> as ATD {_plural(wl_values)}")
-        parts += water
-        hint = "Guessed from the field names (check them): " + "; ".join(parts) + "."
-    return {k: got[k] for k in POINT_FIELD_KEYS}, hint
+    keys = [k for k in GUESS_KEYS if guessed[k]]
+    return {k: got[k] for k in POINT_FIELD_KEYS}, guess_hint(got, keys, wl_values), [k for k in keys if got[k]]
+
+
+def guess_hint(values: dict, guessed: Sequence[str], wl_values: str) -> str:
+    """The sentence "Guessed from the field names (check them): ..." for the boxes `guessed` (field keys) of an
+    exploration row holding `values` (its field keys; `wl_values`: "Levels are"); "" when none was guessed. (0.3.6:
+    moved out of guess_point_row, so a row shows it for the guesses he has not checked yet.)"""
+    if not guessed:
+        return ""
+    g = set(guessed)
+    main = [values[k] for k in ("label_field", "type_field", "top_field", "bottom_elev_field", "depth_field")
+            if k in g]
+    parts = [f"<b>{_esc(', '.join(main))}</b>"] if main else []
+    screens = [values[k] for k in ("screen_top_field", "screen_bottom_field") if k in g]
+    if screens:
+        parts.append(f"screens <b>{_esc(', '.join(screens))}</b>")
+    water = []
+    if "wl_field" in g:
+        text = f"water <b>{_esc(values['wl_field'])}</b> as measured {_plural(wl_values)}"
+        if "wl_date_field" in g:
+            text += f" dated by {_esc(values['wl_date_field'])}"
+        water.append(text)
+    elif "wl_date_field" in g:            # a date guessed for his own level (0.3.6: a row's `guessed` keeps it)
+        water.append(f"measured date <b>{_esc(values['wl_date_field'])}</b>")
+    if "atd_field" in g:
+        water.append(f"ATD <b>{_esc(values['atd_field'])}</b>" if water
+                     else f"water <b>{_esc(values['atd_field'])}</b> as ATD {_plural(wl_values)}")
+    elif "atd_date_field" in g:
+        water.append(f"ATD date <b>{_esc(values['atd_date_field'])}</b>")
+    parts += water
+    if not parts:
+        return ""
+    return "Guessed from the field names (check them): " + "; ".join(parts) + "."
 
 
 def guess_table_fields(fields: Fields, pk: Set[str], saved: Optional[dict] = None, keep_empty: bool = False,

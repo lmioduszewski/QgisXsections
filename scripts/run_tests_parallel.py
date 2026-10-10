@@ -6,14 +6,15 @@ Run it with OSGeo4W's python-qgis (the .bat does), so every worker has QGIS:
     scripts\\run_tests_parallel.bat tests.test_ui tests.test_panel     just those (in parallel when more than one)
     scripts\\run_tests_parallel.bat --workers 4               another number of workers
     scripts\\run_tests_parallel.bat --serial                  everything in one process (as scripts\\run_tests.bat)
-    scripts\\run_tests_parallel.bat --plan                    print which worker gets what; run nothing
+    scripts\\run_tests_parallel.bat --plan                    print which worker gets what (after listing the
+                                                             tests); run no test
 
 Each worker is `python -m unittest -v <its names>` in a process of its own, with the environment of run_tests.bat
 (QT_QPA_PLATFORM=offscreen, QT_QPA_FONTDIR, PYTHONDONTWRITEBYTECODE=1; XSECTIONS_REALDATA and XSECTIONS_GPKG passed
 through) plus PYTHONUNBUFFERED=1 (its prints stay in order in its log) and a matplotlib config folder of its own (a
 copy of the font cache, so no worker ever writes a shared one). Its output goes to worker_<n>.log in a run folder
 under the system temp, printed at the start. Every temp file a test makes is per process already (tests/fixtures.py:
-RUN_TMP and the QGIS profile come from mkdtemp); the workers' RUN_TMP folders carry the run's tag
+RUN_TMP and the QGIS profile come from mkdtemp); the workers' RUN_TMP folders carry the run's tag and the worker's
 (XSECTIONS_RUN_TAG) and are removed once the workers have ended (a process cannot remove its own while QGIS still
 holds a file of its profile).
 
@@ -23,7 +24,11 @@ each of their classes (module.Class), or each of their tests (module.Class.test_
 whole. Tests made at import time count as the loader sees them; a class imported from elsewhere, or tests made by
 load_tests, keep their module whole. When the listing fails, nothing is split. At the end every listed test must
 have started in a worker (or be explained by a set-up error or skip of its class or module, or a crashed worker):
-any other one fails the run ("not run=k").
+any other one fails the run ("not run=k"). The listing process starts and ends QGIS as a worker does (the test
+modules call start_app at import) and is never waited for without end either: once its line of JSON has come whole
+and nothing more for LIST_GRACE s while its output is still open, its exit status is read without waiting (it is
+killed, as far as it can be, when it has none EXIT_GRACE s later), and its list is used, with a note; after
+LIST_TIMEOUT s it is killed and the run goes on without a list. Its temp folder, too, stays while it has not ended.
 
 Balancing: the longest unit first, each onto the least-loaded worker, by the times remembered from earlier runs
 (durations.json next to the run folders; a module never timed is guessed from its number of tests). A module that
@@ -35,6 +40,22 @@ every listed test (one process: unittest's own run of the names).
 A worker has passed only when its exit status is the one `python -m unittest` gives for the result it printed (0 for
 OK, 1 for FAILED, 5 when no test ran and none was skipped): a process that prints OK and then dies (say a crash while
 QGIS shuts down) fails the run as a crashed worker.
+
+A worker whose output stays open after unittest's final result ("Ran N tests in X s", then OK / FAILED (...) / NO
+TESTS RAN) and brings nothing new for RESULT_GRACE s (times its XSECTIONS_TIME_FACTOR) is taken as ended all the same:
+once, a worker's python3.exe stayed stuck in Windows' tear-down of the process after unittest's sys.exit (its handle
+never signalled, its pipe never closed, taskkill powerless), and the launcher waited for ever. Its exit status is then
+read without waiting (GetExitCodeProcess on Windows, poll() elsewhere): when it has one, that is its exit status (the
+rules above apply; the summary notes it); when it has none EXIT_GRACE s later, the process is killed (as far as it
+can be) and the worker counts as hung after its result, which fails the run (the summary names it, its log and its
+PID). The temp folders of a process that has not ended are left in place, and the summary says so.
+
+No worker is waited for without end before its result either. One that has exited without printing unittest's
+result while another process (a child of it) holds its output open counts as crashed once nothing has come for
+RESULT_GRACE s (times its time factor), as if its pipe had closed. And every worker, the serial re-run too, has a
+deadline: WORKER_DEADLINE_K times its planned time (the estimates of its names), at least WORKER_DEADLINE_MIN s, times
+its time factor; a worker still running then (stuck in a test, say) is killed and fails the run as timed out (the
+summary names it, its log and its PID).
 
 Timing tests (tagged @timing_test, tests/fixtures.py) multiply their time limits and waits by XSECTIONS_TIME_FACTOR,
 which the launcher sets for the workers (3 by default; 1 for one process). When several processes ran, every test
@@ -85,7 +106,17 @@ FAILED_IMPORT = "unittest.loader._FailedTest."
 LIST_FLAG = "--list-tests"                  # this script in the listing process
 LIST_MARK = "XSECTIONS-TESTS "              # the listing process's one line of JSON starts with this
 LIST_TIMEOUT = 300.0                        # s; the listing takes a few seconds (the imports of the test modules)
+LIST_GRACE = 10.0           # s of no output after the listing's whole marked line while its pipe is still open
+LIST_LINE_RE = re.compile("^" + re.escape(LIST_MARK) + r"[^\n]*\n", re.M)        # that line, come whole
 NO_TESTS_EXIT = 5 if sys.version_info >= (3, 12) else None      # `python -m unittest` when no test ran
+RESULT_GRACE = 30.0         # s (times the worker's time factor) of no output after its result while its pipe is open
+EXIT_GRACE = 60.0           # s more without an exit status after that: killed, and counted as hung after its result
+KILL_WAIT = 5.0             # s to wait for a hung worker's process to end once killed
+WORKER_DEADLINE_MIN = 900.0  # s (times the worker's time factor): the least time a worker is given
+WORKER_DEADLINE_K = 4.0      # ... or this many times its planned time (its units' estimates), when longer
+POLL = 0.25                 # s between two looks at the workers
+STILL_ACTIVE = 259          # GetExitCodeProcess's code for a process that has not exited
+WAIT_TIMEOUT = 0x102        # WaitForSingleObject: the handle is not signalled (the process has not ended)
 
 # a test starting, in a -v stream: "test_x (tests.test_m.Class.test_x) ... ", or its docstring's line after a newline
 START_RE = re.compile(r"^(?P<method>\w+) \((?P<id>[\w.]+)\)(?= \.\.\. |\r?\n)", re.M)
@@ -285,24 +316,54 @@ class Listing:
         return len(self.ids[name]) if name in self.ids else default
 
 
-def list_tests(names, env, log_path=None):
-    """Run the listing process for `names`: a Listing, or None (printed why) when it fails."""
-    cmd = [sys.executable, str(Path(__file__).resolve()), LIST_FLAG, *names]
+def list_tests(names, env, log_path=None, keep=None):
+    """Run the listing process for `names`: a Listing, or None (printed why) when it fails. Its output is read as a
+    worker's is (a Lister), and it is never waited for without end (no communicate() or wait() without a timeout):
+    it has ended when its pipe has closed and its process ended; or, while its pipe is still open, once its marked
+    line has come whole and nothing more for LIST_GRACE s (check_open: its exit status read without waiting, or it is
+    killed when it has none EXIT_GRACE s later); or LIST_TIMEOUT s after its start it is given up (killed, when it
+    has not exited). A whole list is used however it ended (printed with a note). `keep` (a list) gets the Lister: the run's clean-up leaves its temp
+    folder in place while its process has not ended."""
+    w = Lister(names, os.devnull if log_path is None else log_path, env)
+    if keep is not None:
+        keep.append(w)
     t0 = time.perf_counter()
     try:
-        p = subprocess.run(cmd, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, timeout=LIST_TIMEOUT)
-        text = p.stdout.decode(locale.getpreferredencoding(False) or "utf-8", errors="replace")
-        rc = p.returncode
-    except subprocess.TimeoutExpired as e:
-        text, rc = (e.output or b"").decode("utf-8", errors="replace"), f"none: stopped after {LIST_TIMEOUT:g} s"
+        w.start()
     except OSError as e:
         text, rc = str(e), "none: not started"
-    if log_path is not None:
+        if log_path is not None:
+            try:
+                Path(log_path).write_text(text, encoding="utf-8", errors="backslashreplace")
+            except OSError:
+                pass
+    else:
         try:
-            Path(log_path).write_text(text, encoding="utf-8", errors="backslashreplace")
-        except OSError:
-            pass
+            while not (w.done() or check_open(w, time.perf_counter())):
+                if time.perf_counter() - t0 >= LIST_TIMEOUT:
+                    w.stopped = True
+                    w.stopped_rc = exit_code_now(w.proc)[0]     # (it has exited, something else holds its pipe)
+                    if w.stopped_rc is None:
+                        w.kill_note = w.kill_hung()
+                    break
+                w.thread.join(POLL)
+        except BaseException:                   # (Ctrl+C: it is ended as the workers are, never waited for long)
+            w.kill()
+            try:
+                w.proc.wait(timeout=10)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            raise
+        if w.stopped:
+            text = w.output()[0]
+            rc = w.stopped_rc if w.stopped_rc is not None else f"none: stopped after {LIST_TIMEOUT:g} s"
+        elif w.hung:
+            text, rc = w.text, "none: no exit status after its list"
+        else:
+            text, rc = w.text, w.returncode
+    note = w.note()
+    if note:
+        print(f"(NOTE: {note})", flush=True)
     line = next((ln for ln in reversed(text.splitlines()) if ln.startswith(LIST_MARK)), None)
     listing = None
     if line is not None:                        # (its whole list, even when the process ended badly after it)
@@ -315,7 +376,7 @@ def list_tests(names, env, log_path=None):
         print(f"(the tests could not be listed (exit code {exit_text(rc)}){where}: nothing is split, and the end "
               f"cannot check that every test ran)", flush=True)
         return None
-    if rc != 0:
+    if isinstance(rc, int) and rc != 0:         # (no exit status: said in the note above)
         print(f"(the listing process ended with exit code {exit_text(rc)} after its list{where})", flush=True)
     listing.seconds = time.perf_counter() - t0
     return listing
@@ -445,22 +506,129 @@ def assign(units, workers):
 
 
 # ---------------------------------------------------------------------------------------------- one process
+def printed_result(text):
+    """Does `text` hold unittest's final result: its last "Ran N tests in X s" line, then OK, FAILED (...) or NO
+    TESTS RAN (as Result reads it)?"""
+    ran = None
+    for ran in RAN_RE.finditer(text):
+        pass
+    return ran is not None and VERDICT_RE.search(text, ran.end()) is not None
+
+
+_KERNEL32 = None
+
+
+def _kernel32():
+    """kernel32's GetExitCodeProcess and WaitForSingleObject, with their argument types (a loader of our own, so
+    ctypes.windll's shared functions are left as they are)."""
+    global _KERNEL32
+    if _KERNEL32 is None:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        k.GetExitCodeProcess.restype = wintypes.BOOL
+        k.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        k.WaitForSingleObject.restype = wintypes.DWORD
+        _KERNEL32 = k
+    return _KERNEL32
+
+
+def _win_handle(proc):
+    """The process handle of a Popen on Windows (an int), else None."""
+    h = getattr(proc, "_handle", None) if os.name == "nt" else None
+    return int(h) if isinstance(h, int) and not getattr(h, "closed", False) else None
+
+
+def exit_code_now(proc):
+    """(exit status, has the process ended), read without waiting; (None, False) while it has no exit status.
+    poll() gives one only once the process has ended (on Windows: once its handle is signalled). On Windows a
+    process's exit code is set when it exits, and the kernel's tear-down of it can stay stuck after that (its handle
+    never signalled, its pipes open): there GetExitCodeProcess reads it all the same; STILL_ACTIVE (259) means it has
+    not exited."""
+    rc = proc.poll()
+    if rc is not None:
+        return rc, not process_alive(proc)
+    h = _win_handle(proc)
+    if h is None:
+        return None, False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        code = wintypes.DWORD()
+        if _kernel32().GetExitCodeProcess(h, ctypes.byref(code)) and code.value != STILL_ACTIVE:
+            return int(code.value), False
+    except (OSError, AttributeError, ValueError):
+        pass
+    return None, False
+
+
+def process_alive(proc):
+    """Has the process not ended yet (on Windows: its handle is not signalled, whatever its exit code says)?"""
+    if proc is None:
+        return False
+    h = _win_handle(proc)
+    if h is not None:
+        try:
+            return _kernel32().WaitForSingleObject(h, 0) == WAIT_TIMEOUT
+        except (OSError, AttributeError, ValueError):
+            pass
+    return proc.poll() is None
+
+
+def deadline_for(planned, factor):
+    """The seconds a worker planned at `planned` s is given from its start (check_deadline), at time factor `factor`."""
+    return max(WORKER_DEADLINE_MIN, WORKER_DEADLINE_K * planned) * factor
+
+
 class Worker:
     """One `python -m unittest -v <names>` process. Its output is copied to its log as it comes, each piece noted
-    with the time it arrived: a test starts when its line reaches the pipe and ends when its status does."""
+    with the time it arrived: a test starts when its line reaches the pipe and ends when its status does. The text
+    read so far is there for run_all (output()) while the pipe is still open."""
+
+    cut_without_result = True       # check_open: exited without its result, its output held open -> taken as ended
 
     def __init__(self, label, units, log_path, env):
         self.label, self.units, self.log_path, self.env = label, units, Path(log_path), env
         self.names = [u.name for u in units]
         self.cmd = [sys.executable, "-m", "unittest", "-v", *self.names]
+        self.tag = env.get("XSECTIONS_RUN_TAG", "")             # its processes' RUN_TMP: xsec_run_<tag>...
         self.text = ""
         self.ends, self.times = [], []          # text offset where each piece ends, its arrival time
         self.proc = self.thread = self.result = None
         self.t0 = self.t1 = 0.0
         self.returncode = None
+        self._lock = threading.Lock()
+        self._parts = []                        # the decoded pieces so far
+        self._ended = False                     # its pipe closed and its process ended (as usual)
+        self.last_output = 0.0                  # when its last piece arrived (its start while none has)
+        try:
+            factor = float(env.get("XSECTIONS_TIME_FACTOR", "") or 1.0)
+        except ValueError:
+            factor = 1.0
+        factor = factor if factor > 0 else 1.0
+        self.result_grace = RESULT_GRACE * factor
+        self.exit_grace = EXIT_GRACE
+        # its deadline (check_deadline): killed and timed out when still running that long after its start
+        self.planned = sum(u.estimate for u in units)
+        self.deadline = deadline_for(self.planned, factor)
+        self.timed_out = False
+        # taken as ended while its output was still open (run_all): how its exit status was read ("windows": the
+        # process had not ended, its exit code had been set; "ended": it had ended, something else held its pipe),
+        # or hung (no exit status EXIT_GRACE s after that), and what killing it gave
+        self.cut_off = False
+        self.exit_read = None
+        self.hung = False
+        self.kill_note = None
+        self.waiting_since = None               # when it was first found with its result and no exit status
+        self.who, self.printed = f"worker {label}", "its result"        # (in what is printed of it)
+
+    def complete(self, text):
+        """Does its output hold all it is to print (check_open): unittest's final result."""
+        return printed_result(text)
 
     def start(self):
-        self.t0 = time.perf_counter()
+        self.t0 = self.last_output = time.perf_counter()
         self.proc = subprocess.Popen(self.cmd, cwd=str(ROOT), env=self.env, stdin=subprocess.DEVNULL,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
         self.thread = threading.Thread(target=self._pump, daemon=True)
@@ -468,7 +636,7 @@ class Worker:
 
     def _pump(self):
         decoder = codecs.getincrementaldecoder(locale.getpreferredencoding(False) or "utf-8")(errors="replace")
-        parts, size = [], 0
+        size = 0
         with open(self.log_path, "wb") as log:
             while True:
                 chunk = self.proc.stdout.read(65536)
@@ -478,26 +646,109 @@ class Worker:
                 log.write(chunk)
                 log.flush()
                 piece = decoder.decode(chunk)
-                parts.append(piece)
                 size += len(piece)
-                self.ends.append(size)
-                self.times.append(now)
-            parts.append(decoder.decode(b"", final=True))
-        self.text = "".join(parts)
-        self.returncode = self.proc.wait()
-        self.t1 = time.perf_counter()
+                with self._lock:
+                    self._parts.append(piece)
+                    self.ends.append(size)
+                    self.times.append(now)
+                    self.last_output = now
+            with self._lock:
+                self._parts.append(decoder.decode(b"", final=True))
+        self.proc.stdout.close()                # (its end of the pipe: closed at its end)
+        rc = self.proc.wait()
+        with self._lock:                        # (not once run_all has taken it as ended: what it found stands)
+            if not self.cut_off:
+                self.text = "".join(self._parts)
+                self.returncode = rc
+                self.t1 = time.perf_counter()
+            self._ended = True
+
+    def output(self):
+        """(the text read so far, when its last piece arrived)."""
+        with self._lock:
+            return "".join(self._parts), self.last_output
 
     def done(self):
         return self.thread is not None and not self.thread.is_alive()
 
+    def take_as_ended(self, text, last, rc, how):
+        """Take the worker as ended with the output read so far: with exit status `rc` (read as `how`), or hung
+        (`rc` None). False when its pipe closed and its process ended meanwhile (the usual end stands), except for a
+        hung one (it did not end as unittest ends: killing it does not change that)."""
+        with self._lock:
+            if self._ended and rc is not None:
+                return False
+            self.cut_off = True
+            self.text, self.t1, self.returncode = text, last, rc
+            self.exit_read, self.hung = (how, False) if rc is not None else (None, True)
+            return True
+
     def kill(self):
         if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.kill()
+            except OSError:                     # (a process Windows is still tearing down: access denied)
+                pass
+
+    def kill_hung(self):
+        """Try to end a hung worker's process; what it gave, in words."""
+        try:
             self.proc.kill()
+        except OSError as e:
+            return f"killing it failed ({e})"
+        deadline = time.perf_counter() + KILL_WAIT
+        while time.perf_counter() < deadline:
+            if not process_alive(self.proc):
+                return "it was killed"
+            time.sleep(0.1)
+        return f"it was killed, but had not ended {KILL_WAIT:g} s later"
 
     def time_at(self, offset):
         """When the text at `offset` arrived."""
         i = bisect.bisect_right(self.ends, offset)
         return self.times[i] if i < len(self.times) else (self.t1 or time.perf_counter())
+
+
+class Lister(Worker):
+    """The listing process (this script with LIST_FLAG and the names), read as a worker is: its output is complete
+    once its marked line of JSON has come whole (the last thing it prints); LIST_GRACE s of quiet after that. It has
+    no deadline and is not taken as ended without its list: list_tests gives it up LIST_TIMEOUT s after its start."""
+
+    cut_without_result = False
+
+    def __init__(self, names, log_path, env):
+        super().__init__("list", [], log_path, env)
+        self.cmd = [sys.executable, str(Path(__file__).resolve()), LIST_FLAG, *names]
+        self.who, self.printed = "the listing process", "its list"
+        self.result_grace = LIST_GRACE
+        self.deadline = None                    # (unused: LIST_TIMEOUT)
+        self.stopped = False                    # given up LIST_TIMEOUT s after its start (killed if it had not exited)
+        self.stopped_rc = None                  # ... its exit status then, when it had one
+
+    def complete(self, text):
+        return LIST_LINE_RE.search(text) is not None
+
+    def note(self):
+        """How it ended, when that was not as a process ends (its pipe closed, its process ended), in words; else ""."""
+        pid = getattr(self.proc, "pid", "?")
+        if self.stopped and self.stopped_rc is not None:
+            return (f"the listing process (PID {pid}) had exited (exit code {exit_text(self.stopped_rc)}), but its "
+                    f"output was still open {LIST_TIMEOUT:g} s after its start (held by a process it started?); it "
+                    f"was not waited for any longer")
+        if self.stopped:
+            return (f"the listing process (PID {pid}) had not ended {LIST_TIMEOUT:g} s after its start; "
+                    f"{self.kill_note or 'it was not killed'}")
+        if self.hung:
+            return (f"the listing process (PID {pid}) printed its list, then nothing for {self.result_grace:g} s with "
+                    f"its output still open, and still had no exit status {self.exit_grace:g} s later; "
+                    f"{self.kill_note or 'it was not killed'}; its list is used")
+        if self.exit_read == "windows":
+            return (f"the listing process (PID {pid}) did not end after its list (Windows); exit code "
+                    f"{exit_text(self.returncode)} used")
+        if self.exit_read == "ended":
+            return (f"the listing process (PID {pid}) had ended, but its output stayed open after its list (held by a "
+                    f"process it started?); exit code {exit_text(self.returncode)} used")
+        return ""
 
 
 class Result:
@@ -669,17 +920,39 @@ def mpl_folder(run_dir, label, seed):
     return dest
 
 
-def remove_run_temp(tag):
-    """Remove the RUN_TMP folders of this run's processes (all ended): a test process cannot remove its own while
-    QGIS still holds a file of its profile (symbology-style.db) at exit."""
-    if not tag:
-        return 0
+def run_temp(tag):
+    """The RUN_TMP folders of the processes started with XSECTIONS_RUN_TAG `tag` (or a tag that begins with it)."""
+    return sorted(p for p in Path(tempfile.gettempdir()).glob(f"xsec_run_{tag}*") if p.is_dir()) if tag else []
+
+
+def remove_run_temp(tag, keep=()):
+    """Remove the RUN_TMP folders of this run's processes (ended): a test process cannot remove its own while QGIS
+    still holds a file of its profile (symbology-style.db) at exit. Those of the tags in `keep` stay (a process that
+    has not ended may still use them)."""
     n = 0
-    for p in Path(tempfile.gettempdir()).glob(f"xsec_run_{tag}*"):
-        if p.is_dir():
+    kept = [f"xsec_run_{k}" for k in keep]
+    for p in run_temp(tag):
+        if not any(p.name.startswith(k) for k in kept):
             shutil.rmtree(p, ignore_errors=True)
             n += not p.exists()
     return n
+
+
+def held_temp(workers):
+    """[(worker, its RUN_TMP folders)] for each worker whose process has not ended (hung, or stuck in Windows'
+    tear-down after its exit status was read): its folders are left in place."""
+    return [(w, run_temp(w.tag)) for w in workers if w.proc is not None and process_alive(w.proc)]
+
+
+def held_lines(held):
+    """The summary's lines on the temp folders left in place."""
+    out = []
+    for w, paths in held:
+        pid = getattr(w.proc, "pid", "?")
+        out.append(f"Temp folders of {w.who} left in place: its process (PID {pid}) has not ended "
+                   f"({len(paths)} folder(s){': ' + ', '.join(str(p) for p in paths) if paths else ''}); remove "
+                   f"them once it has (after a restart, if need be).")
+    return out
 
 
 def prune_runs():
@@ -699,25 +972,125 @@ def exit_text(rc):
     return str(rc)
 
 
+def late_exit_note(w):
+    """The summary's note on a worker whose exit status was read while its output was still open, or ""."""
+    if w.exit_read and not printed_result(w.text):          # (check_open: it exited without unittest's result)
+        return (f"worker {w.label}'s process ended (exit code {exit_text(w.returncode)}) without unittest's result, "
+                f"its output held open (by a process it started?)")
+    if w.exit_read == "windows":
+        return (f"worker {w.label}'s process did not end after its result (Windows); exit code "
+                f"{exit_text(w.returncode)} used")
+    if w.exit_read == "ended":
+        return (f"worker {w.label}'s output stayed open after its result although its process had ended (held by a "
+                f"process it started?); exit code {exit_text(w.returncode)} used")
+    return ""
+
+
+def hung_text(w):
+    """What the summary says of a worker that hung after its result."""
+    return (f"WORKER {w.label} HUNG AFTER ITS RESULT ({w.result.verdict}): its process (PID "
+            f"{getattr(w.proc, 'pid', '?')}) printed unittest's result, then nothing for "
+            f"{w.result_grace:g} s, and still had no exit status {w.exit_grace:g} s later; "
+            f"{w.kill_note or 'it was not killed'}. It counts as failed whatever it printed. See {w.log_path}")
+
+
+def timed_out_text(w):
+    """What the summary says of a worker still running at its deadline (check_deadline)."""
+    last = w.result.tests[-1][0] if w.result is not None and w.result.tests else "(none had started)"
+    return (f"WORKER {w.label} TIMED OUT: its process (PID {getattr(w.proc, 'pid', '?')}) was still running "
+            f"{w.deadline:g} s after its start (its deadline: {WORKER_DEADLINE_K:g} x its planned {w.planned:.0f} s, "
+            f"at least {WORKER_DEADLINE_MIN:g} s, times its time factor); {w.kill_note}. The last test it started: "
+            f"{last}. See {w.log_path}")
+
+
 def worker_state(w):
     """A worker's result in a few words: its verdict, or how it ended when that was not as unittest ends."""
     r = w.result
+    if w.timed_out:
+        return f"TIMED OUT after {w.deadline:g} s (PID {getattr(w.proc, 'pid', '?')}; {w.kill_note})"
+    if w.hung:
+        return (f"{r.verdict}, but HUNG after its result: no exit status (PID {getattr(w.proc, 'pid', '?')}; "
+                f"{w.kill_note or 'not killed'})")
     if not r.finished:
-        return f"ended without a result (exit code {exit_text(w.returncode)})"
+        held = " (its output was still open: held by a process it started?)" if w.exit_read else ""
+        return f"ended without a result (exit code {exit_text(w.returncode)}){held}"
+    late = f" ({late_exit_note(w)})" if w.exit_read else ""
     if not r.exit_ok(w.returncode):
         return (f"{r.verdict}, but exit code {exit_text(w.returncode)} (unittest ends with {r.expected_exit()} after "
-                f"that): it ended badly after its result")
-    return r.verdict
+                f"that): it ended badly after its result{late}")
+    return r.verdict + late
+
+
+def check_open(w, now):
+    """For a worker (or the Lister) whose output is still open: True once it is to be taken as ended (take_as_ended
+    has been called). That is when its output holds unittest's final result (the Lister's: its whole list) and
+    nothing new has come for its result_grace: then its exit status is read without waiting and, when it has one,
+    taken; when it still has none exit_grace s later, it is killed and taken as hung after its result. A worker (not
+    the Lister: cut_without_result) quiet that long without its result whose process has an exit status (it has
+    exited, a process it started holding its output) is taken as ended with it: a crash without a result. New output
+    on the way starts it all again."""
+    if now - w.last_output < w.result_grace:
+        w.waiting_since = None
+        return False
+    text, last = w.output()
+    if now - last < w.result_grace:
+        w.waiting_since = None
+        return False
+    if not w.complete(text):
+        w.waiting_since = None
+        if w.cut_without_result:
+            rc, ended = exit_code_now(w.proc)
+            if rc is not None:
+                return w.take_as_ended(text, last, rc, "ended" if ended else "windows")
+        return False
+    rc, ended = exit_code_now(w.proc)
+    if rc is not None:
+        return w.take_as_ended(text, last, rc, "ended" if ended else "windows")
+    if w.waiting_since is None:
+        w.waiting_since = now
+        print(f"  ({w.who} printed {w.printed} {now - last:.0f} s ago and its process (PID "
+              f"{getattr(w.proc, 'pid', '?')}) has not ended: waiting up to {w.exit_grace:g} s more)", flush=True)
+        return False
+    if now - w.waiting_since < w.exit_grace:
+        return False
+    w.kill_note = w.kill_hung()
+    return w.take_as_ended(text, last, None, None)
+
+
+def check_deadline(w, now):
+    """For a worker whose pipe has not closed: True once it is still running `w.deadline` s after its start (its
+    result or not; the Lister has none): then it is killed (when its process is alive; else it had exited, another
+    process holding its output) and taken as ended, timed out, with the output read so far. False when it ended
+    meanwhile on its own (the usual end stands); once killed, it stays timed out whatever its end gives."""
+    if w.deadline is None or w.done() or now - w.t0 < w.deadline:
+        return False
+    with w._lock:
+        if w._ended:                            # (its pipe closed and its process ended meanwhile)
+            return False
+        w.cut_off = True                        # (from here its pump leaves text, exit status and end as found here)
+    text, _last = w.output()
+    rc, _ended = exit_code_now(w.proc)
+    if process_alive(w.proc):
+        w.kill_note = w.kill_hung()
+    else:
+        w.kill_note = f"it had already exited (exit code {exit_text(rc)}); another process held its output"
+    with w._lock:
+        w.text, w.t1, w.returncode, w.timed_out = text, now, rc, True
+    return True
 
 
 def run_all(workers, what):
+    """Start the workers and wait until each has ended: its pipe closed and its process ended, or taken as ended
+    after its result or without one (check_open), or at its deadline (check_deadline). Each one's Result is made as
+    it ends."""
     for w in workers:
         w.start()
     try:
         pending = list(workers)
         while pending:
-            time.sleep(0.25)
-            for w in [w for w in pending if w.done()]:
+            time.sleep(POLL)
+            now = time.perf_counter()
+            for w in [w for w in pending if w.done() or check_open(w, now) or check_deadline(w, now)]:
                 pending.remove(w)
                 w.result = r = Result(w)
                 n = r.counts["run"]
@@ -840,10 +1213,14 @@ def main(argv=None):
         listing = None
         if workers > 1:                         # (its process's temp folder carries a tag of its own: removed)
             tag = f"plan_{os.getpid()}_"
+            listers = []
             try:
-                listing = list_tests(names, worker_env(1.0, None, tag))
-            finally:
-                remove_run_temp(tag)
+                listing = list_tests(names, worker_env(1.0, None, tag), keep=listers)
+            finally:                            # (but not while its process has not ended)
+                held = held_temp(listers)
+                remove_run_temp(tag, keep=[w.tag for w, _p in held])
+                for line in held_lines(held):
+                    print(line, flush=True)
         units = make_units(names, modules, data, workers, listing)
         groups = assign(units, workers) if workers > 1 else [units]       # one process: the order given
         print(f"{len(groups)} worker(s), XSECTIONS_TIME_FACTOR={factor:g}; times from {DURATIONS}"
@@ -852,7 +1229,8 @@ def main(argv=None):
             print(f"{len(listing.all_ids())} tests listed by unittest's loader in {listing.seconds:.1f} s; split "
                   f"along the parts it shows")
         for i, g in enumerate(groups, 1):
-            print(f"worker {i}: about {sum(u.estimate for u in g):.0f} s")
+            est = sum(u.estimate for u in g)
+            print(f"worker {i}: about {est:.0f} s (deadline {deadline_for(est, factor):.0f} s)")
             for u in g:
                 print(f"  {u.estimate:7.1f} s  {u.name}")
         tags = [f"{m}.{t}" for m in modules for t in module_info(m).tags()]
@@ -868,14 +1246,16 @@ def main(argv=None):
     t_start = time.perf_counter()
     realdata = "set" if os.environ.get("XSECTIONS_REALDATA") else "not set"
     print(f"Run folder (a log per worker): {run_dir}", flush=True)
-    tag = run_dir.name + "_"
+    tag = run_dir.name + "_"                    # the run's; each process's begins with it (list_, w<n>_, rerun_)
+    everyone = []                               # the workers started (their temp folders stay until they end)
+    listers = []                                # the listing process (its temp folder too; it is no worker)
     try:
         # ---- the tests unittest's loader finds for the names: the parts a module or class may be split into, and
         # at the end the check that every one of them ran (not needed in one process: that is unittest's own run)
         listing = None
         if workers > 1:
-            listing = list_tests(names, worker_env(1.0, mpl_folder(run_dir, "list", seed), tag),
-                                 run_dir / "list.log")
+            listing = list_tests(names, worker_env(1.0, mpl_folder(run_dir, "list", seed), tag + "list_"),
+                                 run_dir / "list.log", keep=listers)
             if listing is not None:
                 print(f"Listed {len(listing.all_ids())} tests (unittest's loader, one process) in "
                       f"{listing.seconds:.1f} s", flush=True)
@@ -883,20 +1263,22 @@ def main(argv=None):
         groups = assign(units, workers) if workers > 1 else [units]       # one process: the order given
         print(f"XSections tests: {sum(len(g) for g in groups)} name(s) in {len(groups)} worker(s), "
               f"XSECTIONS_TIME_FACTOR={factor:g}, XSECTIONS_REALDATA {realdata}", flush=True)
-        ws = [Worker(i, g, run_dir / f"worker_{i}.log", worker_env(factor, mpl_folder(run_dir, i, seed), tag))
+        ws = [Worker(i, g, run_dir / f"worker_{i}.log",
+                     worker_env(factor, mpl_folder(run_dir, i, seed), f"{tag}w{i}_"))
               for i, g in enumerate(groups, 1)]
+        everyone.extend(ws)
         run_all(ws, "worker")
         wall = time.perf_counter() - t_start
 
-        # ---- the parallel results; a worker that did not end as unittest ends (no result, or an exit status that
-        # disagrees with the result it printed) counts as crashed
+        # ---- the parallel results; a worker that did not end as unittest ends (no result, an exit status that
+        # disagrees with the result it printed, or none at all: hung after its result; or timed out) counts as crashed
         totals = dict.fromkeys(COUNT_KEYS, 0)
         failing = []
         for w in ws:
             for k in COUNT_KEYS:
                 totals[k] += w.result.counts.get(k, 0)
             failing.extend(dict(f, worker=w) for f in w.result.failing())
-        crashed = [w for w in ws if not w.result.exit_ok(w.returncode)]
+        crashed = [w for w in ws if w.timed_out or not w.result.exit_ok(w.returncode)]
         missing, explained = not_run(listing, ws, crashed) if listing is not None else ([], 0)
         expected = len(listing.all_ids()) - explained if listing is not None else None
 
@@ -908,7 +1290,9 @@ def main(argv=None):
                 {"wall": round(wall, 2), "listed": None if listing is None else len(listing.all_ids()),
                  "listing": None if listing is None else round(listing.seconds, 2), "workers": [
                      {"worker": w.label, "names": w.names, "wall": round(w.t1 - w.t0, 2), "exit": w.returncode,
-                      "startup": round(w.result.startup, 2), "tail": round(w.result.tail, 2),
+                      "hung": w.hung, "timed_out": w.timed_out, "deadline": round(w.deadline, 1),
+                      "exit_read": w.exit_read, "startup": round(w.result.startup, 2),
+                      "tail": round(w.result.tail, 2),
                       "tests": [[t[0], t[1], round(t[3] - t[2], 3), round(t[4], 3)] for t in w.result.tests]}
                      for w in ws]}, indent=1), encoding="utf-8")
         except OSError:
@@ -940,8 +1324,10 @@ def main(argv=None):
         if targets and not args.no_rerun and len(ws) > 1:
             print(f"Running the {len(targets)} that failed again, alone in one process (XSECTIONS_TIME_FACTOR=1) ...",
                   flush=True)
-            rw = Worker("re-run", [Unit(t) for t in targets], run_dir / "rerun.log",
-                        worker_env(1.0, mpl_folder(run_dir, "rerun", seed), tag))
+            # (its plan, for its deadline: make_units in one process keeps each target as one unit, names unchanged)
+            rw = Worker("re-run", make_units(targets, modules, data, 1), run_dir / "rerun.log",
+                        worker_env(1.0, mpl_folder(run_dir, "rerun", seed), tag + "rerun_"))
+            everyone.append(rw)
             run_all([rw], "serial")
             rr = rw.result
             bad = [f["target"] for f in rr.failing()]
@@ -950,14 +1336,23 @@ def main(argv=None):
                 ran_it = any(i == t or i.startswith(t + ".") for i in ran_ids)
                 failed = any(b == t or b.startswith(t + ".") or t.startswith(b + ".") for b in bad)
                 # (exit code 1 is unittest's own after a failure: one target failing again does not sink the others)
-                rerun[t] = "ok" if (rr.exit_ok(rw.returncode) and ran_it and not failed) else "FAILED"
+                passed = rr.exit_ok(rw.returncode) and not rw.timed_out and ran_it and not failed
+                rerun[t] = "ok" if passed else "FAILED"
     except KeyboardInterrupt:
-        removed = remove_run_temp(tag)
+        held = held_temp(listers + everyone)
+        removed = remove_run_temp(tag, keep=[w.tag for w, _p in held])
         print(f"\nINTERRUPTED: its processes were ended and {removed} temp folder(s) of theirs removed. "
               f"Logs: {run_dir}", flush=True)
+        for line in held_lines(held):
+            print(line, flush=True)
         return 1
 
-    removed = remove_run_temp(tag)
+    # ---- the temp folders of the run's processes, but those of a process that has not ended (hung, or stuck in
+    # Windows' tear-down after its exit status was read; the listing process too): it may still hold them
+    held = held_temp(listers + everyone)
+    removed = remove_run_temp(tag, keep=[w.tag for w, _p in held])
+    hung = [w for w in everyone if w.hung]          # (workers: a listing process that hung after its list is noted)
+    timed_out = [w for w in everyone if w.timed_out]
 
     # ---- the report
     one = len(ws) == 1
@@ -968,10 +1363,17 @@ def main(argv=None):
     for w in ws:
         r = w.result
         state = r.verdict if r.finished else "NO RESULT"
-        if r.finished and not r.exit_ok(w.returncode):
+        if w.timed_out:
+            state += ", TIMED OUT"
+        elif w.hung:
+            state += " BUT HUNG AFTER ITS RESULT"
+        elif r.finished and not r.exit_ok(w.returncode):
             state += f" BUT EXIT CODE {exit_text(w.returncode)}"
+        if w.exit_read:
+            state += " (exit status read while its output was still open)"
         out(f"  {w.label}: {w.t1 - w.t0:7.1f} s  {r.counts['run']:4d} tests  start-up {r.startup:4.1f} s  "
-            f"exit {exit_text(w.returncode)}  {state}  {w.log_path.name}")
+            f"exit {'none' if w.hung or w.returncode is None else exit_text(w.returncode)}  {state}  "
+            f"{w.log_path.name}")
         out("       " + " ".join(n[len("tests."):] if n.startswith("tests.") else n for n in w.names))
     out("Modules (seconds in their worker, slowest first)")
     for mod, (t, n) in sorted(per_module.items(), key=lambda kv: -kv[1][0]):
@@ -980,7 +1382,11 @@ def main(argv=None):
                                                     if len(where) > 1 else ""))
     for w in crashed:
         out("")
-        if w.result.finished:
+        if w.timed_out:
+            out(timed_out_text(w))
+        elif w.hung:
+            out(hung_text(w))
+        elif w.result.finished:
             out(f"WORKER {w.label} ENDED WITH EXIT CODE {exit_text(w.returncode)} AFTER ITS RESULT "
                 f"({w.result.verdict}; unittest ends with {w.result.expected_exit()} after that): the process ended "
                 f"badly after its tests (a crash at exit?). See {w.log_path}")
@@ -1032,6 +1438,16 @@ def main(argv=None):
     if not args.names and previous and previous.get("tests") != totals["run"]:
         out(f"NOTE: the last full run ran {previous.get('tests')} tests ({previous.get('when', '')}); this one "
             f"{totals['run']}.")
+    for w in listers:
+        if w.note():
+            out(f"NOTE: {w.note()}.")
+    for w in everyone:
+        if w.exit_read:
+            how = "after unittest's result" if printed_result(w.text) else "and it had no result"
+            out(f"NOTE: {late_exit_note(w)} (PID {getattr(w.proc, 'pid', '?')}: nothing came for "
+                f"{w.result_grace:g} s {how}, its output still open).")
+    for line in held_lines(held):
+        out(line)
     if listing is not None and verified:
         n = len(listing.all_ids())
         out(f"Checked against unittest's loader: {'the 1 test' if n == 1 else f'all {n} tests'} it lists for these "
@@ -1039,20 +1455,27 @@ def main(argv=None):
             else f"Checked against unittest's loader: {n - explained} of the {n} tests it lists for these names "
                  f"started; the other {explained} were stopped by a set-up error or skip of their class or module.")
     if not verified:
-        out("The times of this run are not remembered (a worker ended badly, or not every listed test ran).")
+        out("The times of this run are not remembered (a worker ended badly, hung or timed out, or not every listed "
+            "test ran).")
     if rescued:
         out(f"{len(rescued)} timing test(s) failed under the parallel load and passed alone (listed above).")
     out(f"Wall time {wall:.1f} s, {len(groups)} worker(s), XSECTIONS_TIME_FACTOR={factor:g}; the workers' times add "
-        f"up to {sum(w.t1 - w.t0 for w in ws):.1f} s; {removed} temp folder(s) of its processes removed. Logs and "
-        f"summary.txt: {run_dir}")
+        f"up to {sum(w.t1 - w.t0 for w in ws):.1f} s; {removed} temp folder(s) of its processes removed"
+        f"{f' ({sum(len(p) for _w, p in held)} left in place: above)' if held else ''}. Logs and summary.txt: "
+        f"{run_dir}")
     out(SEP2)
     out(f"Ran {totals['run']} test{'' if totals['run'] == 1 else 's'} in {wall:.3f}s")
     out("")
     infos = []
     if not ok:
         infos += [f"{k}={final[k]}" for k in ("failures", "errors") if final[k] > 0]
-        if crashed:
-            infos.append(f"crashed workers={len(crashed)}")
+        plain = [w for w in crashed if not (w.hung or w.timed_out)]
+        if plain:
+            infos.append(f"crashed workers={len(plain)}")
+        if hung:
+            infos.append(f"hung workers={len(hung)}")
+        if timed_out:
+            infos.append(f"timed out workers={len(timed_out)}")
         if missing:
             infos.append(f"not run={len(missing)}")
         if not infos:                                   # (failed in parallel, not counted by unittest)

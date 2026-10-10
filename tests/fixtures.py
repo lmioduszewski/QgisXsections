@@ -387,6 +387,92 @@ def make_seeps_layer(crs=CRS, kind="plane", name="Seeps"):
     return _memory_points(name, [("Name", T.QString), ("Type", T.QString), ("Elev_ft", T.Double)], rows, crs)
 
 
+# 0.3.6: line and polygon layers (Other features). Streams: (Name, Type, Bed_ft, [(station, offset_left) ...])
+STREAMS = [
+    ("Clover Cr.", "Perennial", 497.0, [(800.0, 200.0), (1000.0, -200.0), (1400.0, -200.0), (1600.0, 200.0)]),
+    #   crosses twice: stations 900 and 1500
+    ("Ditch 4", "Ditch", None, [(2500.0, 300.0), (2500.0, -300.0)]),       # through the bend vertex (station 2500)
+    ("Dry run", "Intermittent", None, [(3200.0, 50.0), (3400.0, 60.0)]),   # never crosses
+    ("Canal", "Canal", None, [(3600.0, 0.0), (3900.0, 0.0)]),             # along the line: one crossing at 3750
+]
+# Polygons: (Name, Type, [ring, hole ...] of (station, offset_left) vertices); L = line_length()
+_L = line_length()
+AREAS = [
+    ("Project site", "Site", [[(1000.0, 300.0), (2000.0, 300.0), (2000.0, -300.0), (1000.0, -300.0)]]),  # 1000-2000
+    ("Wetland A", "Wetland", [[(1200.0, 150.0), (1500.0, 150.0), (1500.0, -150.0), (1200.0, -150.0)]]),  # inside it
+    ("Buffer U", "Buffer", [[(3000.0, 100.0), (3100.0, 100.0), (3100.0, -100.0), (3300.0, -100.0), (3300.0, 100.0),
+                             (3400.0, 100.0), (3400.0, -200.0), (3000.0, -200.0)]]),     # two pieces: 3000-3100, 3300-3400
+    ("Parcel A", "Parcel", [[(-200.0, 100.0), (300.0, 100.0), (300.0, -100.0), (-200.0, -100.0)]]),  # open at A: 0-300
+    ("Parcel Z", "Parcel", [[(4400.0, 100.0), (_L + 200.0, 100.0), (_L + 200.0, -100.0), (4400.0, -100.0)]]),  # open
+    #                                                                                                    at A′
+    ("Edge lot", "Parcel", [[(0.0, 100.0), (200.0, 100.0), (200.0, -100.0), (0.0, -100.0)]]),  # A on its edge: closed
+    ("Touch", "Other", [[(2200.0, 0.0), (2300.0, 200.0), (2100.0, 200.0)]]),         # touches at a point: no piece
+    ("Ring pond", "Pond", [[(600.0, 100.0), (800.0, 100.0), (800.0, -100.0), (600.0, -100.0)],
+                           [(650.0, 50.0), (750.0, 50.0), (750.0, -50.0), (650.0, -50.0)]]),   # 600-650, 750-800
+]
+
+
+def _memory_features(geometry, name, fields, rows, crs=CRS):
+    """Memory layer `name` of `geometry` ("LineString", "Polygon"): `fields` [(field name, QMetaType.Type)], `rows`
+    [(QgsGeometry in CRS, [attributes])], transformed to `crs`."""
+    from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsField, QgsProject
+    from qgis.core import QgsVectorLayer
+    lyr = QgsVectorLayer(f"{geometry}?crs={crs}", name, "memory")
+    lyr.dataProvider().addAttributes([QgsField(n, t) for n, t in fields])
+    lyr.updateFields()
+    ct = QgsCoordinateTransform(QgsCoordinateReferenceSystem(CRS), QgsCoordinateReferenceSystem(crs),
+                                QgsProject.instance())
+    feats = []
+    for g, attrs in rows:
+        f = QgsFeature(lyr.fields())
+        f.setAttributes(list(attrs))
+        if crs != CRS:
+            g.transform(ct)
+        f.setGeometry(g)
+        feats.append(f)
+    lyr.dataProvider().addFeatures(feats)
+    lyr.updateExtents()
+    return lyr
+
+
+def make_streams_layer(crs=CRS, name="Streams"):
+    """Streams (STREAMS): a LineString memory layer with Name, Type, Bed_ft (Double); vertices at (station, offset)
+    along LINE (point_at)."""
+    from qgis.core import QgsGeometry, QgsPointXY
+    from qgis.PyQt.QtCore import QMetaType
+    T = QMetaType.Type
+    rows = [(QgsGeometry.fromPolylineXY([QgsPointXY(*point_at(st, off)) for st, off in verts]), [n, typ, bed])
+            for n, typ, bed, verts in STREAMS]
+    return _memory_features("LineString", name, [("Name", T.QString), ("Type", T.QString), ("Bed_ft", T.Double)],
+                            rows, crs)
+
+
+def make_areas_layer(crs=CRS, name="Areas", names=None):
+    """Areas (AREAS, or the rows named in `names`, in AREAS order): a Polygon memory layer with Name, Type."""
+    from qgis.core import QgsGeometry, QgsPointXY
+    from qgis.PyQt.QtCore import QMetaType
+    T = QMetaType.Type
+    rows = [(QgsGeometry.fromPolygonXY([[QgsPointXY(*point_at(st, off)) for st, off in ring] for ring in rings]),
+             [n, typ]) for n, typ, rings in AREAS if names is None or n in names]
+    return _memory_features("Polygon", name, [("Name", T.QString), ("Type", T.QString)], rows, crs)
+
+
+def stream_row(layer=None, **kw):
+    """A new line row (model.feature_row("line") with `kw`; `layer` sets layer_id)."""
+    from xsections.core.model import feature_row
+    if layer is not None:
+        kw["layer_id"] = layer.id()
+    return feature_row("line", **kw)
+
+
+def area_row(layer=None, **kw):
+    """A new polygon row (model.feature_row("polygon") with `kw`; `layer` sets layer_id)."""
+    from xsections.core.model import feature_row
+    if layer is not None:
+        kw["layer_id"] = layer.id()
+    return feature_row("polygon", **kw)
+
+
 def write_gpkg(layer, name, path=None):
     """`layer` written to a GeoPackage (a new file in RUN_TMP unless `path`) with the layer option FID=id (its fid
     column is "id", as in his Explorations.gpkg; the driver adds the R-tree spatial index), then opened again with

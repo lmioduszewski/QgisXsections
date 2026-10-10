@@ -142,7 +142,7 @@ class GuessedRows(LayersCase):
         self.assertFalse(self.prj.isDirty())
         self.assertEqual(settings_store.stored_json(self.prj), "")
         self.assertEqual(self.chips()["Explorations"], ("2 of 3 on · 12 plotted", False))
-        self.assertEqual(self.chips()["Other points"], ("Seeps · 4 plotted", False))
+        self.assertEqual(self.chips()["Other features"], ("Seeps · 4 plotted", False))
 
     def test_only_seeps(self):
         """A project whose only point layer is named like seeps: no exploration row, one Other points row."""
@@ -152,12 +152,12 @@ class GuessedRows(LayersCase):
         self.assertEqual(d.explo_rows, [])
         self.assertEqual([r.layer() for r in d.other_rows], [self.seeps])
         self.assertEqual(self.chips()["Explorations"], ("None", False))
-        self.assertEqual(self.chips()["Other points"], ("Seeps", False))
+        self.assertEqual(self.chips()["Other features"], ("Seeps", False))
         d.refresh()
         self.assertEqual(d.last_error, "")
         self.assertFalse(d.model.has_explorations)
         self.assertEqual(len(d.model.other_points), 4)
-        self.assertEqual(self.chips()["Other points"], ("Seeps · 4 plotted", False))
+        self.assertEqual(self.chips()["Other features"], ("Seeps · 4 plotted", False))
 
     def test_layers_added_later(self):
         """File > New, then the layers are added: the rows are guessed from them (quietly), once."""
@@ -221,7 +221,7 @@ class RowManagement(LayersCase):
         self.prj.addMapLayer(make_seeps_layer(name="Seeps 2"))
         self.assertEqual(d.other_rows, [])
         self.assertEqual(self.chips()["Explorations"], ("None", False))
-        self.assertEqual(self.chips()["Other points"], ("None", False))
+        self.assertEqual(self.chips()["Other features"], ("None", False))
         # File > New: rows are guessed again for the layers added next
         self.prj.clear()
         d.project_cleared()
@@ -260,8 +260,10 @@ class RowManagement(LayersCase):
         self.assertTrue(d._stale and d._timer.isActive())
         d.refresh()
         self.assertIsNotNone(d.model)
-        self.assertIn("its layer is no longer in the project; left out.", d.message.text())
-        self.assertEqual(self.chips()["Other points"], ("Layer missing", True))
+        self.assertIn("its layer is no longer in the project; left out.", " ".join(d.model.warnings))
+        self.assertEqual(other_row(d).check_text(), "Layer not in the project; left out")     # (0.3.6: the row's line)
+        self.assertNotIn("its layer is no longer in the project; left out.", d.message.text())
+        self.assertEqual(self.chips()["Other features"], ("Layer missing", True))
 
     def test_type_counts_with_no_value(self):
         """"plotted / in the layer", the NULL-or-empty type as "(no value)"; the subtitles count the row."""
@@ -270,13 +272,11 @@ class RowManagement(LayersCase):
         tl = explo_row(d, 1).type_list
         texts = {tl.topLevelItem(i).text(0): tl.topLevelItem(i).text(1) for i in range(tl.topLevelItemCount())}
         self.assertEqual(texts, {"Boring": "2 / 3", "Monitoring Well": "1 / 1", "(no value)": "2 / 2"})
-        self.assertEqual(explo_row(d, 1).sub_label.text(),
-                         "Explorations by others · ExploName · 2 of 2 types · 5 plotted")
+        self.assertEqual(explo_row(d, 1).sub_label.text(), "ExploName · 2 of 2 types · black")   # (0.3.6: no counts)
         self.untick(self.others, "O-2")
         d.refresh()
         self.assertEqual(tl.item_for("").text(1), "1 / 2")          # left off: not plotted
-        self.assertEqual(explo_row(d, 1).sub_label.text(),
-                         "Explorations by others · ExploName · 2 of 2 types · 4 plotted, 1 off")
+        self.assertEqual(explo_row(d, 1).sub_label.text(), "ExploName · 2 of 2 types · black")
 
 
 # ------------------------------------------------------------------ a missing layer loses nothing
@@ -735,14 +735,14 @@ class OtherPointsSection(LayersCase):
 
     def test_section(self):
         d = self.dock
-        i = d.sections.index(d.grp_screens)
+        i = d.sections.index(d.grp_explo)                     # (0.3.6: Depths and Screens & water are subsections)
         self.assertIs(d.sections[i + 1], d.grp_other)
-        self.assertEqual((d.grp_other.title(), d.grp_other.objectName()), ("Other points", "xsectionsOtherGroup"))
-        self.assertEqual(d.btn_add_other.text(), "+ Add point layer")
+        self.assertEqual((d.grp_other.title(), d.grp_other.objectName()), ("Other features", "xsectionsOtherGroup"))
+        self.assertEqual(d.btn_add_other.text(), "+ Add layer")
         self.assertTrue(d.grp_explo.isAncestorOf(d.plotted) and d.grp_explo.isAncestorOf(d.btn_add_points))
-        self.assertEqual(self.chips()["Other points"], ("Seeps", False))      # before a model
+        self.assertEqual(self.chips()["Other features"], ("Seeps", False))      # before a model
         d.refresh()
-        self.assertEqual(self.chips()["Other points"], ("Seeps · 4 plotted", False))
+        self.assertEqual(self.chips()["Other features"], ("Seeps · 4 plotted", False))
         self.assertEqual(d.other_readout.text().split("<br>"),
                          ["Seeps: 4 plotted · 1 more within 375 ft", "S-1 on the ground line", "S-2 on the ground line",
                           "S-5 on the ground line", "S-3 on the ground line"])
@@ -758,7 +758,8 @@ class OtherPointsSection(LayersCase):
         self.assertEqual(row.value()["elev_field"], "Elev_ft")
         self.assertEqual(row.elev_hint.text(), "The centre of the symbol marks the elevation. Where Elev_ft is empty, "
                                                "the point sits on the ground line.")
-        self.assertIn("Elev_ft, else on the ground line", row.sub_label.text())
+        self.assertEqual(row.sub_label.text(), "points · Name · Elev_ft")
+        self.assertEqual(row.how_text(), "Elev_ft, else on the ground line")
         self.assertTrue(d._user_changed)
         d.refresh()
         lines = d.other_readout.text().split("<br>")
@@ -775,7 +776,7 @@ class OtherPointsSection(LayersCase):
                                                  r"the ground line")
         row.visible_box.setChecked(False)
         d.refresh()
-        self.assertEqual((d.other_readout.text(), self.chips()["Other points"]), ("No point layer is on.", ("Off", False)))
+        self.assertEqual((d.other_readout.text(), self.chips()["Other features"]), ("No point layer is on.", ("Off", False)))
 
     def test_no_elevation_field_chosen(self):
         """(FIX 0.3.3) "From a field" with no elevation field chosen: the readout says "(no field)", as the row's
@@ -793,8 +794,8 @@ class OtherPointsSection(LayersCase):
         self.assertEqual(d.other_readout.text(), "Seeps: 0 plotted · 1 more within 375 ft · 4 left out (no field)")
 
     def test_every_flag_is_shown(self):
-        """(FIX 0.3.3) More than six flags of other points: six in the Other points readout, the others in the
-        message line; every one is shown somewhere."""
+        """(FIX 0.3.3) More than six flags of other points: six in the Other features readout, then "… and 2 more
+        flags"; every one is shown (0.3.6: on the row's problem line and its check card, not in the message line)."""
         from qgis.PyQt.QtCore import QMetaType
         rows = []
         for i in range(8):                                          # each 30 ft above the LIDAR: flagged (> 25 ft)
@@ -809,9 +810,13 @@ class OtherPointsSection(LayersCase):
         flags = [f"{p.label}: {fl}" for p in d.model.other_points for fl in p.flags]
         self.assertEqual(len(flags), 8)
         readout, message = d.other_readout.text(), d.message.text()
-        self.assertIn("… and 2 more flags (in the message line below)", readout)
+        self.assertIn("… and 2 more flags", readout)
+        row = other_row(d)
+        self.assertEqual(row.check_text(), f"{flags[0]} (+7 more)")
+        card = [f"{term}: {value}" for b in row.badge.blocks for term, value, _suffix in b.items]
         for f in flags:
-            self.assertTrue((f in readout) != (f in message), f)      # in one of the two, not both
+            self.assertIn(f, card)
+            self.assertNotIn(f, message)
 
 
 # ------------------------------------------------------------------ Color rows follow the layer's style (0.3.4)

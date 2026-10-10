@@ -235,7 +235,10 @@ def _target_label(t: Any) -> str:
 
 
 def _offset_cell(t: Any, settings: Settings) -> Tuple[str, str, str]:
-    """("From A", its distance along the line, "40 ft left")."""
+    """("From A", its distance along the line, "40 ft left"); a crossing of a line row (0.3.6, on the line): "crossing"
+    as the small print."""
+    if getattr(t, "kind", "point") == "crossing":
+        return f"From {pretty_label(settings.start_label)}", distance_text(t.station, settings), "crossing"
     side = "left" if t.side == "L" else "right"
     return (f"From {pretty_label(settings.start_label)}", distance_text(t.station, settings),
             f"{_n1(t.offset)} ft {side}")

@@ -1,28 +1,36 @@
 """The XSections panel: every setting, live readouts, the debounced rebuild, and the export buttons.
 
 Flow: any change -> 300 ms timer -> refresh(): settings() -> core.build.build_section ->
-render.scales.plan -> preview.draw / readouts / header chips / map feedback. A SectionError shows in the
-message line at the bottom of the panel, never as a traceback dialog.
+render.scales.plan -> preview.draw / readouts / row problems / header chips / map feedback. A SectionError shows in
+the status line at the bottom of the panel, never as a traceback dialog.
 
-Layout (0.2): collapsible sections (Line, Surfaces, Explorations, Depths, Screens & water, Other points, Scale &
-sheet, Sheet style), all closed whenever the panel opens or a project is loaded; each header carries a summary chip
-(amber when something is missing). Small labels sit above their fields, two fields to a row; short choices are
-segmented buttons; set-once settings fold under "More: ..." inside their section.
+Layout (0.3.6, DESIGN.md decision 27, the approved panel mockup): six sections, Line, Surfaces, Explorations (its
+subsections Layers, All layers, Depths, Water & screens, Plotted), Other features (Layers), Scale & sheet (Scale,
+Elevations, Sheet) and Sheet style (Grid, Depth lines, Page), all closed whenever the panel opens or a project is
+loaded; several may be open at once. A closed section is a solid tile, an open one the navy bar over a framed body
+on a navy rail; each header carries a summary chip (amber when something is missing) and an amber count of the
+layers that need a look. Subsections have navy capital headings; field names sit above their fields in plain
+sentence case, two fields to a row; short choices are segmented buttons; set-once settings fold under round pills
+(Units & datum, Checks, Distances & printers). The layer rows of Surfaces, Explorations and Other features are cards;
+an open one joins its section's rail (widgets.LayerCard, the "Flare"). Explanations under the controls (hints) and
+the readouts show only with Verbose (the ⋯ menu; per user, widgets.verbose). A real problem of a row (ui.problems:
+values left out, a layer gone ...) is one amber line in the row with a count badge and a check card; a guess shows
+only its "check" badge; what no row owns is the status line's (a warning amber, an error red; else "Ready · ...").
 
 Point layers (0.3.3, DESIGN.md decision 22): Explorations is a list of point-layer rows (ui.point_rows.ExplorationRow:
 own explorations, explorations by others, supply wells...), each with its own layer, fields, types, water fields,
-look and "Include in the elevation range"; the rules (within, labels, tops, TD, screens) stay shared. Other points
-(seeps, springs) are rows of their own (OtherPointsRow). "Plotted explorations" lists everything the rows choose on
-the section; what he unticks there is left off this section line (self._hidden, Settings.hidden_points, keyed by the
-line, the layer id and the feature id). Rows made from guesses (a fresh project, layers added later) are never
-saved by themselves.
+look and "Include in the elevation range"; the rules (within, labels, tops, TD, screens) stay shared. Other features
+(0.3.6: seeps and springs as points, creeks as lines, a site as polygons; Other points before) are rows of their own
+(OtherPointsRow). "Plotted" lists everything the rows choose on the section; what he unticks there is left off this
+section line (self._hidden, Settings.hidden_points, keyed by the line, the layer id and the feature id). Rows made
+from guesses (a fresh project, layers added later) are never saved by themselves.
 
-Surfaces: the ground row, then one row per other surface: a raster (widgets.SurfaceRow) or a MODFLOW 6 model surface
-(mf6_dialog.ModelSurfaceRow, added with "+ Add MODFLOW 6…", mf6_dialog.MF6Dialog).
+Surfaces: the ground row (GroundRow), then one row per other surface: a raster (widgets.SurfaceRow) or a MODFLOW 6
+model surface (mf6_dialog.ModelSurfaceRow, added with "+ MODFLOW 6…", mf6_dialog.MF6Dialog).
 
 Sheet style (0.3.4, DESIGN.md decision 23): the grid (Green | Gray | Custom: the major and minor lines' colour, width
 and line style; the first Custom starts from the preset in use, later ones keep his values, saved with the project
-only) and the depth line widths (Black and gray, Color; Reset). An exploration row drawn in Color follows its layer's
+only) and the depth line widths (Black & gray, Color; Reset). An exploration row drawn in Color follows its layer's
 QGIS style: the layer's styleChanged re-reads the style box and rebuilds the section (nothing is saved).
 
 Hover (0.3.1): the preview's hover moves a marker along the section line on the map (preview.hoverChanged /
@@ -52,18 +60,22 @@ from qgis.gui import (QgsAdvancedDigitizingDockWidget, QgsCheckableComboBox, Qgs
                       QgsMapLayerComboBox, QgsMessageBarItem, QgsRasterBandComboBox,
                       QgsScrollArea)
 from qgis.PyQt.QtCore import QEvent, QLocale, QMetaType, QSize, Qt, QTimer, QUrl
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QDoubleValidator, QFont
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QDoubleValidator, QFont, QPainter
 from qgis.PyQt.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                  QMenu, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget)
 
+from ..core.explorations import not_number_text
 from ..core.hover import hover_lines
 from ..core.model import (DEPTH_LW_BLACK, DEPTH_LW_COLOR, DEPTH_LW_LIMITS, GRID_PRESETS, GRID_W_MAX, GRID_W_MIN,
-                          NO_ATD, NO_POINTS, NO_TYPES, POINT_LAYER_DEFAULTS, OTHER_POINT_DEFAULTS, SURFACE_COLORS,
-                          SURFACE_DEFAULTS, SectionError, Settings, clean_hidden, clean_orientation, clean_other_points,
-                          depth_widths, grid_spec, hidden_key, hit_settings, layer_rows, line_key, point_legend_name)
+                          NO_ATD, NO_POINTS, NO_TYPES, POINT_LAYER_DEFAULTS, SURFACE_COLORS, SURFACE_DEFAULTS,
+                          SectionError, Settings, clean_hidden, clean_orientation, clean_other_points, depth_widths,
+                          feature_row, grid_spec, hidden_key, hit_settings, layer_rows, line_key, point_legend_name)
+from ..core.others import feature_kind
 from ..core.surfaces_csv import write_surfaces_csv
 from ..render.scales import hit_in_range, runs_below, td_text
+from . import problems as P
 from . import settings_store
+from . import widgets as W
 from .map_feedback import MapFeedback
 from .maptools import DrawSectionTool, PickLineTool
 from .mf6_dialog import MF6Dialog, ModelSurfaceRow, crs_from_text
@@ -74,13 +86,14 @@ from .point_guess import (ATD_ANY_NAMES, ATD_DATE_NAMES, ATD_DEPTH_NAMES, ATD_EL
                           SCREEN_BOTTOM_NAMES, SCREEN_TOP_NAMES, TABLE_DATE_NAMES, TABLE_ELEV_NAMES,
                           TABLE_KIND_NAMES, TABLE_NAME_NAMES, TOP_NAMES, TYPE_NAMES, WL_DATE_NAMES, WL_DEPTH_NAMES,
                           WL_ELEV_NAMES, WL_NAMES, _norm, guess_field, guess_in_range, is_other_hint, is_point_hint)
-from .point_rows import ExplorationRow, OtherPointsRow, PlottedList, PointRowList, point_layer
+from .point_rows import (ExplorationRow, FitCheckBox, OtherPointsRow, PlottedList, PointRowList, point_layer,
+                         table_layer)
 from .surfaces_csv_dialog import SurfacesCsvDialog
-from .widgets import (CONTROL_H, LINE_STYLE_ICON_SIZE, LINE_STYLE_ICONS, ClickableArea,  # noqa: F401
-                      CollapsibleSection, Disclosure, ElidedLabel, SurfaceRow, Swatch, _cbox, _combo, _esc,
-                      _field_combo, _narrow, _note, _numeric_field_combo, _segmented, _set_combo_data, _spin,
-                      checkbox_grid, field_box, field_label, hrow, link_button, note_label, pair, panel_stylesheet,
-                      theme_for)
+from .widgets import (CONTROL_H, LINE_STYLE_ICON_SIZE, LINE_STYLE_ICONS, BarSwatch, CardHost,  # noqa: F401
+                      ClickableArea, CollapsibleSection, Disclosure, ElidedLabel, Hint, LayerCard, Readout, StatusDot,
+                      Subsection, SurfaceRow, _cbox, _combo, _esc, _field_combo, _narrow, _note, _numeric_field_combo,
+                      _px_font, _segmented, _set_combo_data, _spin, add_button, check_row, checkbox_grid, field_box,
+                      field_label, hrow, link_button, link_cards, pair, panel_stylesheet, theme_for)
 
 LOG_TAG = "XSections"
 DRAWN = "__drawn__"                      # feature-combo data for a line drawn on the map
@@ -117,7 +130,8 @@ FORMAT_CHOICES = [("PDF (vector)", ("pdf", 300)), ("PNG, 300 dpi", ("png", 300))
 EXPORT_FILTERS = {"pdf": "PDF (*.pdf)", "png": "PNG image (*.png)", "svg": "SVG drawing (*.svg)"}
 SCALE_PRESETS = [1, 2, 5, 10, 20, 30, 40, 50, 60, 100, 200, 300, 400, 500, 600, 1000, 2000, 5000]
 COMPASS16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-TOP_MODE_CHIPS = {"field_then_dem": "Table, else LIDAR", "dem": "LIDAR", "field": "Table only"}
+# the six sections' chip keys (chip_texts), in panel order
+SECTION_KEYS = ("line", "surfaces", "explorations", "other", "scale", "style")
 # the Sheet style keys of its chip ("Defaults" when all are at theirs; the Custom grid's values only matter under
 # Custom)
 STYLE_KEYS = ("grid_color", "depth_lw_black", "depth_lw_color", "shade_below", "show_bends", "compact_layout",
@@ -125,8 +139,16 @@ STYLE_KEYS = ("grid_color", "depth_lw_black", "depth_lw_color", "shade_below", "
 GRID_NAMES = {"green": "Green", "gray": "Gray", "custom": "Custom"}
 GRID_LINE_STYLES = [("Solid", "solid"), ("Dashed", "dash"), ("Dotted", "dot")]
 GRID_SPACING_AUTO = "Major lines every inch, minor every tenth."
-GRID_SPACING_MANUAL = "Major and minor lines at the spacing set under Scale & sheet."
-NEW_BADGE_VERSION = "0.3.4"              # the NEW badge on Sheet style > Depth lines (the next release removes it)
+GRID_SPACING_MANUAL = "Major and minor lines at the spacing below."
+# 0.3.6: the texts of the redesigned panel (the explanations that left it are tooltips, and Verbose hints)
+GROUND_TIP = "The ground: always drawn; the explorations sit on it. Click to choose its DEM"
+LINE_HINT = "Pick a line on the map, draw one, or use the selected feature of the layer."
+WITHIN_HINT = "“Within” applies to the Other features point layers too."
+DEPTH_LW_HINT = ("Which layers are black, gray or in color is set for each layer, under Explorations › "
+                 "<b>Drawn in</b>.")
+STYLE_HINT = "The defaults leave the most room to draw and the paper clear for colored pencil."
+VERBOSE_TIP = "Hints and notes under the controls"
+OTHER_ADD_TIP = "Add a layer of other features: seeps or springs (points), creeks (lines), a site (areas)"
 
 ERROR_COLOR = "#c0392b"
 WARN_COLOR = "#9a6700"
@@ -222,7 +244,7 @@ def screens_summary(hits) -> str:
     return f"{first} · {measured} measured {noun}" if measured else f"{first} · {atd} ATD {noun}"
 
 
-_SCREEN_FLAG = re.compile(r"screen|water|\bwl\b|\batd\b", re.IGNORECASE)
+_SCREEN_FLAG = P.SCREEN_FLAG             # (moved to ui.problems in 0.3.6)
 
 
 def _as_curve(geom: QgsGeometry):
@@ -323,19 +345,11 @@ def _edge_choice(value: Any) -> float:
     return min(EDGE_VALUES, key=lambda e: abs(e - v)) if math.isfinite(v) else EDGE_VALUES[0]
 
 
-def _readout() -> QLabel:
-    """The muted line at the bottom of a section (hidden while it has nothing to say)."""
-    lab = QLabel("")
-    lab.setObjectName("xsReadout")
-    lab.setWordWrap(True)
-    lab.setTextFormat(Qt.TextFormat.RichText)
-    lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-    f = QFont(lab.font())
-    if f.pointSizeF() > 0:
-        f.setPointSizeF(f.pointSizeF() * 0.9)
-    lab.setFont(f)
-    lab.hide()
+def _readout() -> Readout:
+    """The muted lines at the bottom of a section (0.3.6: a Verbose note, widgets.Readout; wanted only while it has
+    something to say)."""
+    lab = Readout("")
+    lab.setWanted(False)
     return lab
 
 
@@ -357,6 +371,109 @@ def _tool(icon: str, text: str, tip: str, checkable: bool = False) -> QToolButto
     b.setFixedHeight(CONTROL_H + 2)
     b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)      # hrow() makes row buttons share the width
     return b
+
+
+class GroundRow(LayerCard):
+    """The first card of Surfaces (0.3.6): the ground, always drawn (no check box, nothing to move or remove: no ⋯),
+    its black bar, "Ground" over the DEM's name, band and cell size; its editor holds the DEM layer and band (the dock
+    builds them into `editor`). A click on the card opens or closes it."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("xsGroundCard")
+        self.swatch = BarSwatch("#111111", self.header)
+        self.swatch.setToolTip("The ground line")
+        self.name_area = ClickableArea(self.header)
+        self.name_area.setToolTip(GROUND_TIP)
+        na = QVBoxLayout(self.name_area)
+        na.setContentsMargins(0, 0, 0, 0)
+        na.setSpacing(0)
+        self.name_label = ElidedLabel("Ground", parent=self.name_area)
+        self.sub_label = ElidedLabel("", small=True, parent=self.name_area)
+        na.addWidget(self.name_label)
+        na.addWidget(self.sub_label)
+        self.name_area.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._place_header(None, self.swatch, self.name_area, None)
+        self.editor.setObjectName("xsSurfaceEditor")
+        self.editor_layout = QVBoxLayout(self.editor)
+        self.editor_layout.setContentsMargins(9, 8, 8, 11)
+        self.editor_layout.setSpacing(8)
+        self.name_area.clicked.connect(self.toggle_editor)
+
+    def set_editor_open(self, on: bool) -> None:
+        """Open or close the DEM's editor; while open the name and its subtitle are semibold (as the point rows)."""
+        super().set_editor_open(on)
+        self.sub_label.setBold(bool(on))
+
+
+class _StatusBar(QWidget):
+    """The status line under the scroll area (0.3.6): a 1 px rule on top (field_line), its dot and texts."""
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.fillRect(0, 0, self.width(), 1, theme_for(self.palette()).field_line)
+        p.end()
+
+
+class _FitRow(QWidget):
+    """Widgets on one line (0.3.6, the mockup's rows), `last` at its right end; where the panel is too narrow for one
+    line at their natural widths (260 px with the Windows font), `last` goes under the others: every word stays
+    whole, nothing is clipped. `fill`: the widgets share the width (stretch 1 each; `last` then fills its own line);
+    else they keep their widths and a stretch puts `last` at the right (`gap` px clear of the others at least)."""
+
+    def __init__(self, widgets: Sequence[QWidget], last: QWidget, spacing: int = 6, fill: bool = False,
+                 gap: int = 0, line_spacing: int = 2, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._widgets, self._last = list(widgets), last
+        self._spacing, self._fill, self._gap = spacing, fill, gap
+        self._wrapped = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(line_spacing)
+        self._top = QHBoxLayout()
+        self._top.setContentsMargins(0, 0, 0, 0)
+        self._top.setSpacing(spacing)
+        for w in self._widgets:
+            self._add(self._top, w)
+        if not fill:
+            self._top.addStretch(1)
+        self._add(self._top, last)
+        self._bottom = QHBoxLayout()
+        self._bottom.setContentsMargins(0, 0, 0, 0)
+        if not fill:
+            self._bottom.addStretch(1)
+        lay.addLayout(self._top)
+        lay.addLayout(self._bottom)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+    def _add(self, lay: QHBoxLayout, w: QWidget) -> None:
+        if self._fill:
+            lay.addWidget(w, 1)
+        else:
+            lay.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    @staticmethod
+    def _need(w: QWidget) -> int:
+        return w.minimumWidth() if w.minimumWidth() > 0 else max(w.sizeHint().width(), w.minimumSizeHint().width())
+
+    def one_line_width(self) -> int:
+        """The width all of them need on one line."""
+        ws = [self._need(w) for w in self._widgets + [self._last]]
+        return sum(ws) + self._spacing * (len(ws) - 1) + self._gap
+
+    def wrapped(self) -> bool:
+        """`last` is on a line of its own."""
+        return self._wrapped
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        wrap = self.width() < self.one_line_width()
+        if wrap == self._wrapped:
+            return
+        self._wrapped = wrap
+        src, dst = (self._top, self._bottom) if wrap else (self._bottom, self._top)
+        src.removeWidget(self._last)
+        self._add(dst, self._last)
 
 
 # ---------------------------------------------------------------- the dock
@@ -399,7 +516,8 @@ class XSectionsDock(QgsDockWidget):
         # line layers removed while left-off entries were kept for their lines: old id -> (name, fid of the line in
         # use, or None); the same layer added again (a new id) takes those entries (_on_layers_added)
         self._gone_lines: Dict[str, Tuple[str, Optional[int]]] = {}
-        self._other_flags_shown: set = set()   # other points' flags the Other points readout lists (refresh)
+        self._mapped: set = set()         # 0.3.6: the model warnings shown as the rows' problems (_update_problems)
+        self._message_kind = ""           # "error" | "warn": what the status line's message is (its dot)
         self._removing_layers = False     # the project is removing layers: the layer boxes' moves are not choices
         self._was_closed = True           # the panel was closed (not just behind another tab): collapse on show
         self._theme_key: Tuple = ()
@@ -437,6 +555,7 @@ class XSectionsDock(QgsDockWidget):
             self.apply_settings(Settings())
         self._connect_widgets()
         self._connect_hover()
+        W.verbose_hub().changed.connect(self._on_verbose_changed)      # (another dock, a test: undone in cleanup)
         self.collapse_all()
 
     # ================================================================ UI construction
@@ -454,28 +573,49 @@ class XSectionsDock(QgsDockWidget):
         content = QWidget()
         self.content = content
         lay = QVBoxLayout(content)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        lay.setContentsMargins(2, 4, 2, 2)
+        lay.setSpacing(0)                 # (the sections' own bottom margins space them: 3 px closed, 10 px open)
         self.scroll.setWidget(content)
 
         for build in (self._build_line_group, self._build_ground_group, self._build_explorations_group,
-                      self._build_depth_group, self._build_screens_group, self._build_other_group,
-                      self._build_export_group, self._build_style_group):
+                      self._build_other_group, self._build_export_group, self._build_style_group):
             lay.addWidget(build())
         self.sections[0].header.first = True
         self.sections[-1].header.last = True
         lay.addStretch(1)
         outer_lay.addWidget(self.scroll, 1)
 
+        # the status line (0.3.6): a dot, then the message (a warning amber, an error red) or "Ready · ..."
+        self.status_bar = _StatusBar()
+        sl = QHBoxLayout(self.status_bar)
+        sl.setContentsMargins(10, 6, 10, 6)
+        sl.setSpacing(7)
+        self.status_dot = StatusDot()
+        dot_box = QWidget()                      # the dot beside the first line of a wrapped message
+        dl = QVBoxLayout(dot_box)
+        dl.setContentsMargins(0, 5, 0, 0)
+        dl.setSpacing(0)
+        dl.addWidget(self.status_dot)
+        dl.addStretch(1)
         self.message = QLabel("")
         self.message.setWordWrap(True)
         self.message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.message.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.message.setContentsMargins(4, 0, 4, 0)
+        self.message.setFont(_px_font(self.message.font(), 11.5))
         self.message.hide()
-        outer_lay.addWidget(self.message)
+        self.status_text = QLabel("")
+        self.status_text.setObjectName("xsStatus")
+        self.status_text.setWordWrap(True)
+        self.status_text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.status_text.setFont(_px_font(self.status_text.font(), 11.5))
+        self.status_text.hide()
+        sl.addWidget(dot_box, 0)
+        sl.addWidget(self.message, 1)
+        sl.addWidget(self.status_text, 1)
+        self.status_bar.hide()
+        outer_lay.addWidget(self.status_bar)
 
-        # action bar: Refresh, ⋯ (points CSV, save line), Export…
+        # action bar: Refresh, ⋯ (points CSV, save line, Verbose), Export…
         self.btn_refresh = _tool("/mActionRefresh.svg", "", "Refresh: rebuild the section now (after editing "
                                                             "layers, for example)")
         self.btn_refresh.setFixedSize(32, 28)
@@ -483,10 +623,17 @@ class XSectionsDock(QgsDockWidget):
         self.btn_more.setFixedSize(32, 28)
         self.btn_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         more = QMenu(self.btn_more)
+        more.setToolTipsVisible(True)
         self.btn_csv = more.addAction(QgsApplication.getThemeIcon("/mActionFileSaveAs.svg"), "Export points CSV…")
         self.btn_csv.setToolTip("One row per plotted exploration: station, offset, side, top, bottom, flags")
         self.act_save_line = more.addAction(QgsApplication.getThemeIcon("/mActionAddLayer.svg"), "Save line to layer")
         self.act_save_line.setToolTip(f'Add this section line to the temporary layer "{LINES_LAYER_NAME}"')
+        more.addSeparator()
+        # Verbose (0.3.6, D13): the hints and notes under the controls, per user (QgsSettings), off by default
+        self.act_verbose = more.addAction("Verbose")
+        self.act_verbose.setCheckable(True)
+        self.act_verbose.setChecked(W.verbose())
+        self.act_verbose.setToolTip(VERBOSE_TIP)
         self.btn_more.setMenu(more)
         self.btn_export = QPushButton("Export…")
         self.btn_export.setObjectName("xsPrimary")
@@ -502,6 +649,9 @@ class XSectionsDock(QgsDockWidget):
         bl.addWidget(self.btn_more)
         bl.addWidget(self.btn_export, 1)
         outer_lay.addWidget(bar)
+        # the one check card of the panel (0.3.6, D15): a child of the panel, opened by a click on a row's badge
+        self.card_host = CardHost(outer)
+        outer._xs_card_host = self.card_host
         self.setWidget(outer)
         self.setMinimumWidth(260)
         self._apply_theme()
@@ -511,7 +661,8 @@ class XSectionsDock(QgsDockWidget):
         self.sections.append(sec)
         return sec
 
-    def _more(self, sec: CollapsibleSection, text: str) -> Disclosure:
+    def _more(self, sec, text: str) -> Disclosure:
+        """A pill (0.3.6: a round button opening a dashed box) at the end of `sec` (a section or a subsection)."""
         d = Disclosure(text)
         self._disclosures.append(d)
         sec.addWidget(d)
@@ -525,41 +676,40 @@ class XSectionsDock(QgsDockWidget):
         _narrow(self.line_layer)
         self.line_feature = QComboBox()
         _narrow(self.line_feature)
-        g.addWidget(pair(field_box("Line layer", self.line_layer), field_box("Feature", self.line_feature)))
+        g.addWidget(pair(field_box("Layer", self.line_layer), field_box("Feature", self.line_feature)))
 
-        self.btn_pick = _tool("/mActionIdentify.svg", "Pick", "Click a line feature on the map (any visible line "
-                                                              "layer)", checkable=True)
-        self.btn_draw = _tool("/mActionCaptureLine.svg", "Draw", "Draw on the map: click vertices, right-click to "
-                                                                 "finish, Esc to cancel. Snapping works.", checkable=True)
-        self.btn_selected = _tool("/mActionSelectRectangle.svg", "Selected", "Use the selected feature of the line "
-                                                                             "layer (or of the active layer)")
+        # (0.3.6: text only, as the mockup)
+        self.btn_pick = _tool("", "Pick", "Click a line feature on the map (any visible line layer)", checkable=True)
+        self.btn_draw = _tool("", "Draw", "Draw on the map: click vertices, right-click to finish, Esc to cancel. "
+                                          "Snapping works.", checkable=True)
+        self.btn_selected = _tool("", "Selected", "Use the selected feature of the line layer (or of the active "
+                                                  "layer)")
         g.addWidget(hrow(self.btn_pick, self.btn_draw, self.btn_selected))
+        self.line_hint = Hint(LINE_HINT)
+        g.addWidget(self.line_hint)
 
+        # Ends: A to A′, Reverse, and "Save to layer" at the right
         self.start_label = QLineEdit()
         self.end_label = QLineEdit()
         for e, tip in ((self.start_label, "Label of the start (left end) of the section"),
                        (self.end_label, "Label of the end (right end) of the section")):
-            e.setFixedWidth(56)
+            e.setFixedWidth(54)
             e.setToolTip(tip)
         self.btn_reverse = _tool("/mActionReverseLine.svg", "", "Reverse: swap the ends, so A is at the other end "
                                                                 "(your layer is not edited)")
         if self.btn_reverse.icon().isNull():
             self.btn_reverse.setText("⇄")
         self.btn_reverse.setFixedSize(30, CONTROL_H)
-        ends = QWidget()
-        el = QHBoxLayout(ends)
-        el.setContentsMargins(0, 0, 0, 0)
-        el.setSpacing(6)
+        self.btn_save_line = link_button("Save to layer", f'Add this section line to the temporary layer '
+                                                          f'"{LINES_LAYER_NAME}"')
+        self.btn_save_line.setFont(_px_font(self.btn_save_line.font(), 11.0))
+        ends = field_label("Ends")
+        ends.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         to = QLabel("to")
         to.setObjectName("xsMuted")
-        el.addWidget(self.start_label)
-        el.addWidget(to)
-        el.addWidget(self.end_label)
-        el.addWidget(self.btn_reverse)
-        el.addStretch(1)
-        self.btn_save_line = link_button("Save line to layer", f'Add this section line to the temporary layer '
-                                                               f'"{LINES_LAYER_NAME}"')
-        g.addWidget(field_box("End labels", ends, links=[self.btn_save_line]))
+        self.ends_row = _FitRow([ends, self.start_label, to, self.end_label, self.btn_reverse], self.btn_save_line,
+                                gap=12)
+        g.addWidget(self.ends_row)
         self.line_readout = _readout()
         g.addWidget(self.line_readout)
         self.grp_line = g
@@ -567,78 +717,57 @@ class XSectionsDock(QgsDockWidget):
 
     def _build_ground_group(self) -> QWidget:
         g = self._section("Surfaces", "surfaces", "xsectionsGroundGroup")
-        self.surface_list = QFrame()
-        self.surface_list.setObjectName("xsSurfaceList")
+        # the cards: the ground first, then the other surfaces (frameless: each row is a card, 0.3.6)
+        self.surface_list = QWidget()
+        self.surface_list.setObjectName("xsSurfaceRows")
         self._surface_layout = QVBoxLayout(self.surface_list)
-        self._surface_layout.setContentsMargins(1, 1, 1, 1)
-        self._surface_layout.setSpacing(0)
+        self._surface_layout.setContentsMargins(0, 0, 0, 0)
+        self._surface_layout.setSpacing(4)
 
         # the ground: always drawn, cannot be removed; its editor holds the DEM layer and band
-        ground = QFrame()
-        ground.setObjectName("xsGroundRow")
-        gl = QHBoxLayout(ground)
-        gl.setContentsMargins(6, 4, 6, 4)
-        gl.setSpacing(6)
-        lock = Swatch(dot=True)
-        lock.setToolTip("The ground is always drawn; the explorations sit on it")
-        gl.addWidget(lock)
-        gl.addWidget(Swatch("#111111"))
-        self.ground_name = ClickableArea()
-        self.ground_name.setToolTip("Show or hide the ground DEM")
-        gn = QVBoxLayout(self.ground_name)
-        gn.setContentsMargins(0, 0, 0, 0)
-        gn.setSpacing(0)
-        self.ground_title = ElidedLabel("Ground")
-        self.ground_title.setBold(True)
-        self.ground_sub = ElidedLabel("", small=True)
-        gn.addWidget(self.ground_title)
-        gn.addWidget(self.ground_sub)
-        self.ground_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        gl.addWidget(self.ground_name, 1)
-        spacer = QWidget()
-        spacer.setFixedWidth(24)
-        gl.addWidget(spacer)
-        self._surface_layout.addWidget(ground)
-
-        self.ground_editor = QFrame()
-        self.ground_editor.setObjectName("xsSurfaceEditor")
-        ge = QVBoxLayout(self.ground_editor)
-        ge.setContentsMargins(28, 7, 8, 9)
-        ge.setSpacing(7)
+        self.ground_row = GroundRow()
+        self.ground_name = self.ground_row.name_area
+        self.ground_title = self.ground_row.name_label
+        self.ground_sub = self.ground_row.sub_label
+        self.ground_editor = self.ground_row.editor
         self.dem_layer = QgsMapLayerComboBox()
         self.dem_layer.setFilters(Qgis.LayerFilter.RasterLayer)
         self.dem_layer.setAllowEmptyLayer(True, "(choose the ground DEM)")
         _narrow(self.dem_layer)
         self.dem_band = QgsRasterBandComboBox()
         _narrow(self.dem_band, 4)
-        ge.addWidget(pair(field_box("DEM layer", self.dem_layer), field_box("Band", self.dem_band), (3, 2)))
-        self._surface_layout.addWidget(self.ground_editor)
+        self.ground_row.editor_layout.addWidget(pair(field_box("DEM layer", self.dem_layer),
+                                                     field_box("Band", self.dem_band), (3, 2)))
+        self._surface_layout.addWidget(self.ground_row)
         g.addWidget(self.surface_list)
+        g.body.watch(self.ground_row)
+        self.ground_row.editorToggled.connect(self._link_surface_cards)
+        self.ground_row.checksChanged.connect(self._update_counts)
+        self._link_surface_cards()
 
-        self.btn_add_surface = _tool("", "+ Add surface", "Add another raster line: a water table, a model layer…")
-        self.btn_add_bands = _tool("", "+ Add all bands…", "One surface per band of a multi-band raster")
+        # + Surface, + Bands…, + MODFLOW 6… in one row (0.3.6); each as wide as its text at least
+        self.btn_add_surface = _tool("", "+ Surface", "Add another raster line: a water table, a model layer…")
+        self.btn_add_bands = _tool("", "+ Bands…", "One surface per band of a multi-band raster")
         self.btn_add_bands.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._bands_menu = QMenu(self.btn_add_bands)
         self.btn_add_bands.setMenu(self._bands_menu)
-        self.btn_add_mf6 = _tool("", "+ Add MODFLOW 6…", "Surfaces read from a MODFLOW 6 model run: the model top, "
-                                                         "layer bottoms, heads and the water table")
-        add_rows = QWidget()
-        al = QVBoxLayout(add_rows)
-        al.setContentsMargins(0, 0, 0, 0)
-        al.setSpacing(5)
-        al.addWidget(hrow(self.btn_add_surface, self.btn_add_bands))
-        al.addWidget(hrow(self.btn_add_mf6))
-        add_rows.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        g.addWidget(add_rows)
+        self.btn_add_mf6 = _tool("", "+ MODFLOW 6…", "Surfaces read from a MODFLOW 6 model run: the model top, "
+                                                    "layer bottoms, heads and the water table")
+        for b in (self.btn_add_surface, self.btn_add_bands, self.btn_add_mf6):
+            b.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)   # equal, but never cut short
+        self.add_surfaces_row = _FitRow([self.btn_add_surface, self.btn_add_bands], self.btn_add_mf6, spacing=5,
+                                        fill=True, line_spacing=5)
+        g.addWidget(self.add_surfaces_row)
 
-        more = self._more(g, "More: units and datum")
+        self.units_more = self._more(g, "Units & datum")
         self.z_units = _combo([("Auto (from the layer)", "auto"), ("Feet", "ft"), ("US survey feet", "ftUS"),
                                ("Meters (converted to feet)", "m")])
         self.z_units.setToolTip("Elevation units of the ground DEM")
         self.datum = QLineEdit()
         self.datum.setPlaceholderText("e.g. NAVD88")
         self.datum.setToolTip("Vertical datum, printed in the axis titles and notes")
-        more.addWidget(pair(field_box("Ground units", self.z_units), field_box("Vertical datum", self.datum)))
+        self.units_more.addWidget(pair(field_box("Ground units", self.z_units),
+                                       field_box("Vertical datum", self.datum)))
         self.ground_readout = _readout()
         g.addWidget(self.ground_readout)
         self.grp_ground = g
@@ -646,207 +775,198 @@ class XSectionsDock(QgsDockWidget):
 
     def _build_explorations_group(self) -> QWidget:
         g = self._section("Explorations", "explorations", "xsectionsExplorationsGroup")
-        # the point layers, one row each (ui.point_rows.ExplorationRow), drawn in this order
-        head = QWidget()
-        hl = QHBoxLayout(head)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(6)
-        hl.addWidget(field_label("Point layers"), 1)
-        order = note_label("drawn in this order")
-        order.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        hl.addWidget(order, 0)
-        head.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        g.addWidget(head)
+        # Layers: one row per point layer (ui.point_rows.ExplorationRow), drawn top first
+        self.layers_note = Hint("top drawn first", rich=False)
+        self.layers_note.setHead(True)
+        self.layers_note.setToolTip("Layers are drawn top first")
+        layers = g.add_subsection("Layers", [self.layers_note])
         self.explo_list = PointRowList(self._new_explo_row)
-        g.addWidget(self.explo_list)
-        self.btn_add_points = _tool("", "+ Add point layer", "Add an explorations layer: your own, explorations by "
-                                                             "others, supply wells…")
-        g.addWidget(hrow(self.btn_add_points))
-        # every exploration the rows choose on this section; unticked ones are left off this line
-        self.plotted = PlottedList()
-        self._disclosures.append(self.plotted)
-        g.addWidget(self.plotted)
+        layers.addWidget(self.explo_list)
+        self.btn_add_points = add_button("+ Add layer", "Add an explorations layer: your own, explorations by "
+                                                        "others, supply wells…")
+        layers.addWidget(self.btn_add_points)
+        self.explo_list.set_band_host(g.body)
 
+        # All layers: the rules every row follows
+        shared = g.add_subsection("All layers")
         self.tolerance = _spin(0.0, 1.0e6, 1, 10.0, " ft of the line")
         self.tolerance.setToolTip("Explorations and other points within this distance of the line are projected "
                                   "onto it")
         self.label_dir = _segmented([("Vertical", True), ("Horizontal", False)],
                                     ["Labels written upward", "Horizontal labels, staggered"])
-        g.addWidget(pair(field_box("Within", self.tolerance, note="all layers"), field_box("Labels", self.label_dir)))
+        shared.addWidget(pair(field_box("Within", self.tolerance), field_box("Labels", self.label_dir)))
         self.label_text = _combo([("Name only", False), ("Name + offset and direction", True)])
         self.label_text.setToolTip("Name + offset: \"MW-3 · 40 ft S\" = projected 40 ft south onto the line")
-        g.addWidget(field_box("Label text", self.label_text))
+        shared.addWidget(field_box("Label text", self.label_text))
+        self.within_hint = Hint(WITHIN_HINT)
+        shared.addWidget(self.within_hint)
+
+        self._build_depth_group(g)
+        self._build_screens_group(g)
+        # Plotted: every exploration the rows choose on this section; unticked ones are left off this line
+        self.plotted = PlottedList()
+        g.addWidget(self.plotted)
         self.explo_readout = _readout()
         g.addWidget(self.explo_readout)
         self.grp_explo = g
         return g
 
-    def _build_depth_group(self) -> QWidget:
-        g = self._section("Depths", "depths", "xsectionsDepthGroup")
-        self.depth_line = _cbox("Draw a line from top to bottom",
-                                "A line from the top of each exploration down to its bottom", strong=True)
-        g.addWidget(self.depth_line)
-        self.td_label = _cbox("Label the total depth (TD 50′)",
-                              "Write the total depth (TD 50') just below the bottom of each line")
-        g.addWidget(self.td_label)
-
-        more = self._more(g, "More: where tops come from (all layers)")
+    def _build_depth_group(self, g: CollapsibleSection) -> Subsection:
+        """Explorations › Depths (0.3.6; a section of its own before): Depth line, TD label, Tops from, and the
+        Checks pill."""
+        sub = g.add_subsection("Depths")
+        self.depth_line = _cbox("Depth line", "Draw a line from the top of each exploration down to its bottom")
+        self.td_label = _cbox("TD label", "Label the total depth, as TD 50′, just below the bottom of each line")
+        sub.addWidget(check_row(self.depth_line, self.td_label))
         self.top_mode = _combo([("Table, else LIDAR at the exploration", "field_then_dem"),
                                 ("LIDAR at the exploration", "dem"), ("Table only", "field")])
-        more.addWidget(field_box("Top from", self.top_mode))
-        self.zero_missing = _cbox("Treat 0 as missing (tops, depths, screens, water levels)",
-                                  "Shapefiles store an empty number as 0. Applies to the top, bottom and depth "
-                                  "fields, the screen and water-level fields and other points' elevation fields: "
-                                  "untick it if an elevation of 0 ft (sea level) is real")
-        more.addWidget(self.zero_missing)
+        self.top_mode.setToolTip("Where each exploration's top comes from (all layers)")
+        sub.addWidget(field_box("Tops from", self.top_mode))
+        self.checks_more = self._more(sub, "Checks")
+        self.zero_missing = _cbox("0 means missing",
+                                  "Tops, depths, screens and water levels of 0 are taken as missing (shapefiles store "
+                                  "an empty number as 0). Untick it if an elevation of 0 ft (sea level) is real; "
+                                  "other features' elevation fields follow it too.")
+        self.checks_more.addWidget(self.zero_missing)
         self.top_max_diff = _spin(0.0, 1.0e5, 1, 5.0, " ft")
         self.top_max_diff.setToolTip("A table top further than this from LIDAR is replaced by LIDAR (flagged). When "
                                      "that happens, a table bottom further than this from LIDAR top − depth is "
                                      "replaced too. 0 turns the checks off.")
         self.top_max_diff.setFixedWidth(76)
         self.top_max_diff.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        before = QLabel("Ignore a table top more than")
+        before = QLabel("Ignore a table top off LIDAR by over")
         before.setWordWrap(True)
         before.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        after = QLabel("from LIDAR")
         self.top_max_diff_row = QWidget()
         rl = QHBoxLayout(self.top_max_diff_row)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(5)
         rl.addWidget(before, 1)
         rl.addWidget(self.top_max_diff, 0)
-        rl.addWidget(after, 0)
-        more.addWidget(self.top_max_diff_row)
-        more.addWidget(_note("Each exploration: top from the table, else LIDAR; bottom from the table, else top − depth."))
-        g.addWidget(self._hint("The top, bottom and depth <b>fields</b> are chosen for each layer, in its row under "
-                               "Explorations."))
+        self.top_max_diff_row.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.checks_more.addWidget(self.top_max_diff_row)
         self.depth_readout = _readout()
-        g.addWidget(self.depth_readout)
-        self.grp_depth = g
-        return g
+        sub.addWidget(self.depth_readout)
+        self.grp_depth = sub
+        return sub
 
-    def _build_screens_group(self) -> QWidget:
-        g = self._section("Screens & water", "screens", "xsectionsScreensGroup")
-        self.screens = _cbox("Draw screens and water levels", "Well screens, and measured and ATD water levels, "
-                             "from each layer's fields or its table of water levels", strong=True)
-        g.addWidget(self.screens)
-        self.wl_label = _segmented([("Off", "off"), ("Elevation", "elev"), ("Elev. + date", "elev_date")],
+    def _build_screens_group(self, g: CollapsibleSection) -> Subsection:
+        """Explorations › Water & screens (0.3.6; the Screens & water section before): Draw them, Print beside."""
+        sub = g.add_subsection("Water & screens")
+        self.screens = _cbox("Draw them", "Draw screens and water levels: well screens, and measured and ATD water "
+                             "levels, from each layer's fields or its table of water levels")
+        self.screens.setMinimumHeight(CONTROL_H)
+        self.wl_label = _segmented([("Off", "off"), ("Elev.", "elev"), ("+ date", "elev_date")],
                                    ["No text", "The elevation beside each water level", "Elevation and date"])
-        g.addWidget(field_box("Print beside the symbol", self.wl_label))
-        g.addWidget(self._hint("Screen and water-level fields, whether they are depths or elevations, and any "
-                               "table of water levels are chosen for each layer, in its row."))
+        sub.addWidget(pair(self.screens, field_box("Print beside", self.wl_label), (5, 4)))
         self.screens_readout = _readout()
-        g.addWidget(self.screens_readout)
-        self.grp_screens = g
-        return g
+        sub.addWidget(self.screens_readout)
+        self.grp_screens = sub
+        return sub
 
     def _build_other_group(self) -> QWidget:
-        g = self._section("Other points", "other", "xsectionsOtherGroup")
-        # point layers of other features (seeps, springs): a symbol and a label each (ui.point_rows.OtherPointsRow)
+        g = self._section("Other features", "other", "xsectionsOtherGroup")
+        # layers of other features: points (seeps, springs), lines (creeks), polygons (a site); a symbol or a
+        # bracket and a label each (ui.point_rows.OtherPointsRow)
+        layers = g.add_subsection("Layers")
         self.other_list = PointRowList(self._new_other_row)
-        g.addWidget(self.other_list)
-        self.btn_add_other = _tool("", "+ Add point layer", "Add a layer of other points, such as seeps or springs")
-        g.addWidget(hrow(self.btn_add_other))
+        layers.addWidget(self.other_list)
+        self.btn_add_other = add_button("+ Add layer", OTHER_ADD_TIP)
+        layers.addWidget(self.btn_add_other)
         self.other_readout = _readout()
-        g.addWidget(self.other_readout)
+        layers.addWidget(self.other_readout)
+        self.other_list.set_band_host(g.body)
         self.grp_other = g
         return g
 
-    @staticmethod
-    def _hint(text: str) -> QLabel:
-        """A muted note under a section's fields (rich text: <b> for the words that matter)."""
-        lab = _note(text)
-        lab.setTextFormat(Qt.TextFormat.RichText)
-        return lab
-
     def _build_export_group(self) -> QWidget:
         g = self._section("Scale & sheet", "scale", "xsectionsExportGroup")
+        sub = g.add_subsection("Scale")
         self.h_scale = ScaleCombo()
         self.v_scale = ScaleCombo()
         self.h_scale.setToolTip("Horizontal scale: feet per inch of paper")
         self.v_scale.setToolTip("Vertical scale: feet per inch of paper")
-        g.addWidget(pair(field_box("Horizontal", hrow("1 in =", self.h_scale, "ft", spacing=4)),
-                         field_box("Vertical", hrow("1 in =", self.v_scale, "ft", spacing=4))))
+        sub.addWidget(pair(field_box("Horizontal", hrow("1 in =", self.h_scale, "ft", spacing=4)),
+                           field_box("Vertical", hrow("1 in =", self.v_scale, "ft", spacing=4))))
+
+        sub = g.add_subsection("Elevations")
+        self.z_mode = _segmented([("Auto", "auto"), ("Manual", "manual")],
+                                 ["Rounded to the major grid", "Type the lowest and highest elevations"])
+        # (beside Auto | Manual: "Split sheets" only while the narrowest panel has no room for the whole text)
+        self.tile = FitCheckBox("Split across sheets", "Split sheets")
+        self.tile.setToolTip("Tile along the section with match lines and one major interval of overlap")
+        self.tile.setMinimumHeight(CONTROL_H)
+        sub.addWidget(pair(self.z_mode, self.tile, (5, 4)))
+        self.z_min = _spin(-1.0e6, 1.0e6, 1, 10.0, " ft")
+        self.z_max = _spin(-1.0e6, 1.0e6, 1, 10.0, " ft")
+        self.z_range_row = pair(field_box("Lowest", self.z_min), field_box("Highest", self.z_max))
+        sub.addWidget(self.z_range_row)               # shown only under Manual (_update_enabled)
+
+        sub = g.add_subsection("Sheet")
         self.sheet = _combo(SHEET_CHOICES)
         self.fmt = _combo(FORMAT_CHOICES)
-        g.addWidget(pair(field_box("Sheet", self.sheet), field_box("Format", self.fmt)))
+        sub.addWidget(pair(field_box("Size", self.sheet), field_box("Format", self.fmt)))
         # every sheet landscape or portrait, or Auto as before (0.3.5; off with a custom page, see _update_enabled)
         self.orientation = _segmented(ORIENT_CHOICES, ORIENT_TIPS)
-        g.addWidget(field_box("Orientation", self.orientation))
-        self.z_mode = _segmented([("Auto", "auto"), ("Manual", "manual")],
-                                 ["Rounded to the major grid", "Type the range (More)"])
-        self.tile = _cbox("Split across sheets", "Tile along the section with match lines and one major interval of "
-                          "overlap")
-        self.tile.setMinimumHeight(CONTROL_H)
-        g.addWidget(pair(field_box("Elevations", self.z_mode), self.tile, (4, 5)))
+        sub.addWidget(field_box("Orientation", self.orientation))
         self.title_text = QLineEdit()
-        self.title_text.setPlaceholderText("Optional title line (project, site…)")
-        g.addWidget(field_box("Title", self.title_text))
-
-        more = self._more(g, "More: grid, labels, printers")
-        self.grid_auto = _cbox("Grid from scale (1 in, 0.1 in)", "Major grid every paper inch, minor every 0.1 in")
-        more.addWidget(self.grid_auto)
-        self.h_major = _spin(0.001, 1.0e7, 2, 10.0)
-        self.h_minor = _spin(0.001, 1.0e7, 2, 1.0)
-        self.v_major = _spin(0.001, 1.0e7, 2, 5.0)
-        self.v_minor = _spin(0.001, 1.0e7, 2, 1.0)
-        more.addWidget(field_box("Grid H, ft (major / minor)", hrow(self.h_major, "/", self.h_minor, spacing=4)))
-        more.addWidget(field_box("Grid V, ft (major / minor)", hrow(self.v_major, "/", self.v_minor, spacing=4)))
-        self.z_min = _spin(-1.0e6, 1.0e6, 1, 10.0)
-        self.z_max = _spin(-1.0e6, 1.0e6, 1, 10.0)
-        more.addWidget(pair(field_box("Min elevation, ft", self.z_min), field_box("Max elevation, ft", self.z_max)))
-        self.below_in = _spin(0.0, 20.0, 2, 0.25, " in")
-        self.below_in.setToolTip("Grid kept below the lowest point, in paper inches")
+        self.title_text.setPlaceholderText("Optional (project, site…)")
+        sub.addWidget(field_box("Title", self.title_text))
+        self.distances_more = self._more(sub, "Distances & printers")
         self.distance_labels = _segmented([("Feet", "feet"), ("Stations", "station")],
                                           ["0, 1,000, 2,000", "0+00, 10+00"])
-        more.addWidget(pair(field_box("Grid below lowest", self.below_in),
-                            field_box("Distances", self.distance_labels)))
         self.allowed_sheets = QgsCheckableComboBox()
         for key in SHEET_KEYS:
             self.allowed_sheets.addItemWithCheckState(SHEET_SHORT[key], Qt.CheckState.Unchecked, key)
         self.allowed_sheets.setToolTip("Sheets your printers take: used by 'Smallest' and for tiling")
         _narrow(self.allowed_sheets)
-        more.addWidget(field_box("Printers take", self.allowed_sheets))
+        self.distances_more.addWidget(pair(field_box("Distances", self.distance_labels),
+                                           field_box("Printers take", self.allowed_sheets)))
         self.export_readout = _readout()
-        g.addWidget(self.export_readout)
+        sub.addWidget(self.export_readout)
         self.grp_export = g
         return g
 
     def _build_style_group(self) -> QWidget:
         g = self._section("Sheet style", "style", "xsectionsStyleGroup")
         defaults = Settings()
-        # the grid: Green | Gray (presets, one muted line of their colours and widths) | Custom (a small table)
+        # Grid: Green | Gray (presets, one muted line of their colours and widths) | Custom (a small table), its
+        # spacing (from the scale, or typed: moved here from Scale & sheet in 0.3.6) and the fill
+        sub = g.add_subsection("Grid")
         self.grid_color = _segmented([("Green", "green"), ("Gray", "gray"), ("Custom", "custom")],
                                      ["Green engineering pad (the default)", "Gray, for black-and-white printers",
                                       "Your own colors, widths and line styles"])
-        g.addWidget(field_box("Grid", self.grid_color))
-        self.grid_info = self._hint(self._grid_info_text("green"))
-        g.addWidget(self.grid_info)
-        g.addWidget(self._build_custom_grid())
-        # the depth lines' widths (NEW in 0.3.4)
-        self.depth_lw_head = QFrame()
-        self.depth_lw_head.setObjectName("xsSubheadRow")
-        hl = QHBoxLayout(self.depth_lw_head)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(6)
-        head = field_label("Depth lines")
-        head.setObjectName("xsSubheadLabel")
-        head.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self.depth_lw_new = QLabel("NEW")
-        self.depth_lw_new.setObjectName("xsNewBadge")
-        self.depth_lw_new.setToolTip(f"New in {NEW_BADGE_VERSION}")
-        f = QFont(self.depth_lw_new.font())
-        if f.pointSizeF() > 0:
-            f.setPointSizeF(max(6.5, f.pointSizeF() * 0.75))
-        self.depth_lw_new.setFont(f)
-        self.depth_lw_new.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        sub.addWidget(field_box("Look", self.grid_color))
+        self.grid_info = _note(self._grid_info_text("green"))       # (always shown under Green / Gray)
+        self.grid_info.setTextFormat(Qt.TextFormat.RichText)
+        sub.addWidget(self.grid_info)
+        sub.addWidget(self._build_custom_grid())
+        self.grid_auto = _cbox("Spacing from the scale (1 in, 0.1 in)", "Major grid every paper inch, minor every "
+                                                                        "0.1 in")
+        sub.addWidget(self.grid_auto)
+        self.h_major = _spin(0.001, 1.0e7, 2, 10.0)
+        self.h_minor = _spin(0.001, 1.0e7, 2, 1.0)
+        self.v_major = _spin(0.001, 1.0e7, 2, 5.0)
+        self.v_minor = _spin(0.001, 1.0e7, 2, 1.0)
+        for s, tip in ((self.h_major, "Major spacing, ft"), (self.v_major, "Major spacing, ft"),
+                       (self.h_minor, "Minor spacing, ft"), (self.v_minor, "Minor spacing, ft")):
+            s.setToolTip(tip)
+        self.grid_spacing_row = pair(field_box("Horizontal, ft", hrow(self.h_major, "/", self.h_minor, spacing=4)),
+                                     field_box("Vertical, ft", hrow(self.v_major, "/", self.v_minor, spacing=4)))
+        sub.addWidget(self.grid_spacing_row)          # shown only while the spacing is typed (_update_enabled)
+        self.fill_grid = _segmented(FILL_CHOICES, FILL_TIPS)
+        _set_combo_data(self.fill_grid, defaults.fill_grid)
+        self.fill_grid.setToolTip("Add whole major intervals of grid to use the sheet height (not on a custom page "
+                                  "size or with manual elevations). Both puts the larger half below, for the geology")
+        self.below_in = _spin(0.0, 20.0, 2, 0.25, " in")
+        self.below_in.setToolTip("Grid kept below the lowest point, in paper inches")
+        sub.addWidget(pair(field_box("Fill sheet", self.fill_grid), field_box("Below lowest", self.below_in)))
+
+        # Depth lines: the widths of the exploration lines (0.3.4), Reset in the heading
         self.btn_lw_reset = link_button("Reset", "Back to 0.75 pt and 1.6 pt")
-        hl.addWidget(head, 0, Qt.AlignmentFlag.AlignVCenter)
-        hl.addWidget(self.depth_lw_new, 0, Qt.AlignmentFlag.AlignVCenter)
-        hl.addStretch(1)
-        hl.addWidget(self.btn_lw_reset, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.depth_lw_head.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        g.addWidget(self.depth_lw_head)
+        self.btn_lw_reset.setFont(_px_font(self.btn_lw_reset.font(), 11.0, W.MEDIUM))
+        sub = g.add_subsection("Depth lines", [self.btn_lw_reset])
+        self.depth_lw_head = sub.heading
         lo, hi = DEPTH_LW_LIMITS["depth_lw_black"]
         self.depth_lw_black = _spin(lo, hi, 2, 0.05, " pt")
         self.depth_lw_black.setToolTip("Width of black and gray depth lines")
@@ -855,26 +975,17 @@ class XSectionsDock(QgsDockWidget):
         self.depth_lw_color.setToolTip("Width of colored depth lines")
         self.depth_lw_black.setValue(defaults.depth_lw_black)
         self.depth_lw_color.setValue(defaults.depth_lw_color)
-        g.addWidget(pair(field_box("Black and gray", self.depth_lw_black), field_box("Color", self.depth_lw_color)))
-        self.depth_lw_hint = self._hint("Which layers are black, gray or in color is set for each layer, under "
-                                        "Explorations &gt; <b>Drawn in</b>.")
-        g.addWidget(self.depth_lw_hint)
+        sub.addWidget(pair(field_box("Black & gray", self.depth_lw_black), field_box("Color", self.depth_lw_color)))
+        self.depth_lw_hint = Hint(DEPTH_LW_HINT)
+        sub.addWidget(self.depth_lw_hint)
+
+        # Page: the printer edge and what the sheet carries
+        sub = g.add_subsection("Page")
         self.edge_margin = _segmented(EDGE_CHOICES, EDGE_TIPS)
         _set_combo_data(self.edge_margin, _edge_choice(defaults.edge_margin_in))
         self.edge_margin.setToolTip("Clear strip kept at the paper edge, where printers cannot print. Most laser "
                                     "printers print to within 0.25 in; check yours before choosing 0.3 in")
-        self.fill_grid = _segmented(FILL_CHOICES, FILL_TIPS)
-        _set_combo_data(self.fill_grid, defaults.fill_grid)
-        self.fill_grid.setToolTip("Add whole major intervals of grid to use the sheet height (not on a custom page "
-                                  "size or with manual elevations). Both puts the larger half below, for the geology")
-        self.style_rule = QFrame()                       # the dashed rule above Printer edge and Fill with grid
-        self.style_rule.setObjectName("xsRuleTop")
-        rl = QVBoxLayout(self.style_rule)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(0)
-        rl.addWidget(pair(field_box("Printer edge", self.edge_margin), field_box("Fill with grid", self.fill_grid)))
-        self.style_rule.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        g.addWidget(self.style_rule)
+        sub.addWidget(pair(field_box("Printer edge", self.edge_margin), None, (5, 4)))
         self.compact_layout = _cbox("Compact layout", "Title on one line, end letters just above the frame, two short "
                                     "note lines beside the scale bar, the elevation title on the left only")
         self.compact_layout.setChecked(defaults.compact_layout)
@@ -884,14 +995,15 @@ class XSectionsDock(QgsDockWidget):
         self.show_bends = _cbox("Bend lines", "A dashed vertical line and BEND label at each bend of the section line")
         self.show_bends.setChecked(defaults.show_bends)
         self.shade_below = _cbox("Shade below ground", "Shade below the ground line")
-        g.addWidget(checkbox_grid([self.compact_layout, self.show_notes, self.show_bends, self.shade_below]))
-        g.addWidget(_note("The defaults leave the most room to draw and the paper clear for colored pencil."))
+        sub.addWidget(checkbox_grid([self.compact_layout, self.show_notes, self.show_bends, self.shade_below]))
+        self.style_hint = Hint(STYLE_HINT)
+        sub.addWidget(self.style_hint)
         self.grp_style = g
         return g
 
     def _build_custom_grid(self) -> QWidget:
-        """Sheet style > Grid: Custom: Major / Minor x Color, Width, Line, then the spacing note and "Start from
-        Green · Gray" (the mockup's table)."""
+        """Sheet style › Grid: Custom: Major / Minor x Color, Width, Line, then the spacing note (Verbose) and "Start
+        from Green · Gray" at the right (the mockup's table)."""
         box = self.grid_custom_box = QWidget()
         outer = QVBoxLayout(box)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -938,10 +1050,11 @@ class XSectionsDock(QgsDockWidget):
         fl = QHBoxLayout(foot)
         fl.setContentsMargins(0, 0, 0, 0)
         fl.setSpacing(3)
-        self.grid_spacing_note = _note(GRID_SPACING_AUTO)
+        self.grid_spacing_note = Hint(GRID_SPACING_AUTO)            # (Verbose; its text follows the spacing)
         self.btn_grid_from_green = link_button("Green", "Start from the Green grid")
         self.btn_grid_from_gray = link_button("Gray", "Start from the Gray grid")
         fl.addWidget(self.grid_spacing_note, 1)
+        fl.addStretch(0)                         # (the links stay at the right while the note is hidden)
         for w in (_muted("Start from"), self.btn_grid_from_green, _muted("·"), self.btn_grid_from_gray):
             fl.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
         foot.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -952,14 +1065,14 @@ class XSectionsDock(QgsDockWidget):
 
     @staticmethod
     def _grid_info_text(preset: str) -> str:
-        """The muted line under Green / Gray: its major and minor colours and widths ("solid · the default" for
-        Green)."""
+        """The muted line under Green / Gray (the mockup's legend line): its major and minor colours and widths and
+        the line style."""
         key = preset if preset in GRID_PRESETS else "green"
         (maj_c, maj_w, maj_s), (min_c, min_w, _min_s) = GRID_PRESETS[key]
         words = {"solid": "solid", "dash": "dashed", "dot": "dotted"}
-        tail = words.get(maj_s, maj_s) + (" · the default" if key == "green" else "")
-        return (f'<span style="color:{maj_c}">━━</span> Major {fmt_num(maj_w)} pt &nbsp; '
-                f'<span style="color:{min_c}">──</span> Minor {fmt_num(min_w)} pt &nbsp; {tail}')
+        return (f'<span style="color:{maj_c}">━━</span> Major {fmt_num(maj_w)} pt &nbsp;&nbsp; '
+                f'<span style="color:{min_c}">──</span> Minor {fmt_num(min_w)} pt &nbsp;&nbsp; '
+                f'{words.get(maj_s, maj_s)}')
 
     # ---- Sheet style behaviour (the grid presets, Custom, the depth line widths)
     def _set_custom_grid(self, spec) -> None:
@@ -973,8 +1086,8 @@ class XSectionsDock(QgsDockWidget):
                 _set_combo_data(seg, "solid")
 
     def _sync_grid_ui(self, *args) -> None:
-        """The preset line under Green / Gray or the Custom table, and the spacing note (the automatic grid of
-        Scale & sheet, or its manual spacing)."""
+        """The preset line under Green / Gray or the Custom table, and the spacing note (a Verbose hint: the
+        automatic spacing, or the one typed below)."""
         v = self.grid_color.currentData()
         custom = v == "custom"
         self.grid_custom_box.setHidden(not custom)
@@ -1049,8 +1162,8 @@ class XSectionsDock(QgsDockWidget):
 
     # ---- open / closed sections (never saved)
     def collapse_all(self) -> None:
-        """Every section closed, "More" folded (the Plotted explorations list too), surface and point-row editors
-        closed (the ground's open while there is no DEM), every exploration row's More folded."""
+        """Every section closed, the pills folded, surface and point-row editors closed (the ground's open while
+        there is no DEM), every exploration row back on its Layer tab, the check card closed."""
         for sec in self.sections:
             sec.setCollapsed(True)
         for d in self._disclosures:
@@ -1059,10 +1172,28 @@ class XSectionsDock(QgsDockWidget):
             row.set_editor_open(False)
         for row in self.explo_rows + self.other_rows:
             row.set_editor_open(False)
-            more = getattr(row, "more", None)
-            if more is not None:
-                more.setExpanded(False)
-        self.ground_editor.setVisible(self.dem_layer.currentLayer() is None)
+        for row in self.explo_rows:
+            row.tabs.setCurrentIndex(0)
+        self.ground_row.set_editor_open(self.dem_layer.currentLayer() is None)
+        self.card_host.close()
+
+    def _close_card(self, *args) -> None:
+        """The check card goes (the panel scrolled, a section opened or closed)."""
+        self.card_host.close()
+
+    # ---- Verbose (0.3.6, D13: per user, never in the project)
+    def _on_verbose_toggled(self, on: bool) -> None:
+        """The ⋯ menu's Verbose: every Hint and readout follows (widgets.verbose_hub)."""
+        W.set_verbose(bool(on))
+
+    def _on_verbose_changed(self, on: bool) -> None:
+        """Verbose changed elsewhere (another panel, a test): the menu item follows, silently."""
+        try:
+            self.act_verbose.blockSignals(True)
+            self.act_verbose.setChecked(bool(on))
+            self.act_verbose.blockSignals(False)
+        except RuntimeError:                    # (the panel is going away)
+            pass
 
     # ================================================================ point-layer rows
     @property
@@ -1121,13 +1252,21 @@ class XSectionsDock(QgsDockWidget):
         """The valid point layers in the order of the layers panel, then any not in it (in mapLayers() order, or in
         the order of `among`); only those of `among` when it is given (layers just added are not in the panel
         yet)."""
+        return self._layers_of(("point",), among)
+
+    def _feature_layers(self, among: Optional[Sequence[Any]] = None) -> List[QgsVectorLayer]:
+        """The valid point, line and polygon layers (core.others.feature_kind), as _point_layers orders them (0.3.6:
+        the layers an Other features row may draw)."""
+        return self._layers_of(("point", "line", "polygon"), among)
+
+    @staticmethod
+    def _layers_of(kinds: Sequence[str], among: Optional[Sequence[Any]] = None) -> List[QgsVectorLayer]:
         prj = QgsProject.instance()
         out: List[QgsVectorLayer] = []
         seen = set()
 
         def take(lyr) -> None:
-            if (isinstance(lyr, QgsVectorLayer) and lyr.isValid() and lyr.geometryType() == Qgis.GeometryType.Point
-                    and lyr.id() not in seen):
+            if isinstance(lyr, QgsVectorLayer) and feature_kind(lyr) in kinds and lyr.id() not in seen:
                 seen.add(lyr.id())
                 out.append(lyr)
 
@@ -1167,12 +1306,25 @@ class XSectionsDock(QgsDockWidget):
         self._mark_user()
         return row
 
+    def _default_feature_layer(self) -> Optional[QgsVectorLayer]:
+        """+ Add layer (Other features)'s layer (0.3.6): the valid point, line and polygon layers (layer order) that no
+        row uses, but the section line's and the "XSections lines" layer: those named like seeps or springs first,
+        then free point layers, then the other free layers; else the first point layer (None without any)."""
+        line = self.line_layer.currentLayer()
+        used = self._used_point_ids() | ({line.id()} if line is not None else set())
+        free = [l for l in self._feature_layers()
+                if l.id() not in used and not l.customProperty(LINES_LAYER_PROP, False)]
+        points = self._point_layers()
+        cands = ([l for l in free if is_other_hint(l.name())] + [l for l in free if feature_kind(l) == "point"]
+                 + free + points)
+        return cands[0] if cands else None
+
     def add_other_points(self, layer: Optional[QgsVectorLayer] = None, open_editor: bool = True) -> OtherPointsRow:
-        """+ Add point layer (Other points): a row for `layer` (default: a point layer no row uses, seeps and springs
-        first), its fields guessed, its editor open."""
+        """+ Add layer (Other features): a row for `layer` (default: _default_feature_layer) of its kind
+        (model.feature_row: a point, line or polygon row), its fields guessed, its editor open."""
         if layer is None:
-            layer = self._default_point_layer(is_other_hint)
-        d = dict(OTHER_POINT_DEFAULTS, layer_id=layer.id() if layer is not None else "")
+            layer = self._default_feature_layer()
+        d = feature_row(feature_kind(layer) or "point", layer_id=layer.id() if layer is not None else "")
         row = self._append_other_row(d, open_editor=open_editor, guess=True)
         self._mark_user()
         return row
@@ -1198,6 +1350,7 @@ class XSectionsDock(QgsDockWidget):
             row.set_end_labels(a, b)
         self._update_enabled()
         self._track_layer_signals()
+        self._update_problems()
 
     def _on_explo_emptied(self) -> None:
         self._points_none = True                         # he removed the last row: a ground line only
@@ -1295,7 +1448,7 @@ class XSectionsDock(QgsDockWidget):
         self.dem_layer.activated.connect(self._mark_user)
         self.dem_band.bandChanged.connect(ch)
         self.dem_band.bandChanged.connect(self._update_ground_row)
-        self.ground_name.clicked.connect(lambda: self.ground_editor.setVisible(self.ground_editor.isHidden()))
+        # (the ground row's name area opens and closes its editor by itself: GroundRow)
         self.btn_add_surface.clicked.connect(lambda: self.add_surface())
         self._bands_menu.aboutToShow.connect(self._fill_bands_menu)
         self.btn_add_mf6.clicked.connect(lambda: self.add_mf6())
@@ -1306,6 +1459,7 @@ class XSectionsDock(QgsDockWidget):
             lst.changed.connect(self._on_rows_edited)
             lst.rowsChanged.connect(self._on_rows_changed)
             lst.emptied.connect(emptied)
+            lst.checksChanged.connect(self._update_counts)       # a row's badge came, went or changed
         self.btn_add_points.clicked.connect(lambda: self.add_point_layer())
         self.btn_add_other.clicked.connect(lambda: self.add_other_points())
         self.plotted.toggled.connect(self._on_plotted_toggled)
@@ -1363,6 +1517,11 @@ class XSectionsDock(QgsDockWidget):
         # bottom
         self.btn_refresh.clicked.connect(self.reload)
         self.btn_export.clicked.connect(self.export_section)
+        self.act_verbose.toggled.connect(self._on_verbose_toggled)
+        # the check card closes when the panel scrolls or a section opens or closes (0.3.6)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._close_card)
+        for sec in self.sections:
+            sec.collapsedStateChanged.connect(self._close_card)
         # layers added to / removed from the project later, the project CRS, the project being written (Save As:
         # model paths relative to its new place) (disconnected in cleanup)
         prj = QgsProject.instance()
@@ -1414,6 +1573,7 @@ class XSectionsDock(QgsDockWidget):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
+        self.card_host.close()
         if self.isHidden():               # closed or toggled off (not merely behind another dock tab)
             self._was_closed = True
             self._hide_cursor()
@@ -1668,8 +1828,9 @@ class XSectionsDock(QgsDockWidget):
         self._gone_lines = {}
         for lab in (self.line_readout, self.ground_readout, self.explo_readout, self.depth_readout,
                     self.screens_readout, self.other_readout, self.export_readout):
-            lab.hide()
+            lab.setWanted(False)
         self._set_message("")
+        self._update_problems()                          # (no model: only the rows' own problems stay)
         self.collapse_all()
         self._update_chips()
 
@@ -1721,7 +1882,7 @@ class XSectionsDock(QgsDockWidget):
         explo = [dict(POINT_LAYER_DEFAULTS, layer_id=l.id(), in_range=in_range(l), visible=in_range(l))
                  for l in named]
         used = {l.id() for l in named}
-        others = [dict(OTHER_POINT_DEFAULTS, layer_id=l.id()) for l in layers
+        others = [feature_row("point", layer_id=l.id()) for l in layers
                   if l.id() not in used and is_other_hint(l.name())]
         return explo, others
 
@@ -1736,6 +1897,7 @@ class XSectionsDock(QgsDockWidget):
         guess = Settings()
         self._guess_layers(guess, layers)
         added = self._point_layers(layers)
+        added_features = self._feature_layers(layers)            # (an Other features row: any of the three kinds)
         with self._quiet():
             if self.dem_layer.currentLayer() is None and guess.dem_layer_id:
                 self.dem_layer.setLayer(prj.mapLayer(guess.dem_layer_id))
@@ -1761,12 +1923,14 @@ class XSectionsDock(QgsDockWidget):
                 self._set_explo_rows(guess.point_layers, guess=True)
             if not self.other_rows and not self._others_none and guess.other_points:
                 self._set_other_rows(guess.other_points, guess=True)
-            # a missing row takes its layer back: the first added point layer of the name its layer had
+            # a missing row takes its layer back: the first added layer of the name its layer had (a point layer for
+            # an exploration row; a point, line or polygon layer for an Other features row)
             for row in self.explo_rows + self.other_rows:
                 name = row.last_layer_name()
                 if not row.is_missing() or not name:
                     continue
-                back = next((l for l in added if l.name() == name), None)
+                pool = added_features if isinstance(row, OtherPointsRow) else added
+                back = next((l for l in pool if l.name() == name), None)
                 if back is not None:
                     old_id = row.stored()["layer_id"]
                     row.take_layer(back)
@@ -1837,6 +2001,7 @@ class XSectionsDock(QgsDockWidget):
             row.set_removing(False)
         self._update_enabled()
         self._update_ground_row()
+        self._update_problems()
         self._update_chips()
         self._track_layer_signals()
         # a row's (or a surface's) layer gone: the section is built again (an exploration row's: the build errors;
@@ -1933,6 +2098,11 @@ class XSectionsDock(QgsDockWidget):
         self._schedule()
 
     def _update_ground_row(self, *args) -> None:
+        self._show_ground_row()
+        self._update_problems()
+
+    def _show_ground_row(self) -> None:
+        """The ground card's subtitle: the DEM's name, band and cell size (amber "(choose the ground DEM)")."""
         dem = self.dem_layer.currentLayer()
         if dem is None:
             self.ground_sub.setText("(choose the ground DEM)")
@@ -1953,9 +2123,7 @@ class XSectionsDock(QgsDockWidget):
     # ---- other surfaces
     def _set_surface_rows(self, surfaces: Sequence[dict]) -> None:
         for row in self.surface_rows:
-            self._surface_layout.removeWidget(row)
-            row.setParent(None)
-            row.deleteLater()
+            self._drop_surface_row(row)
         self.surface_rows = []
         for d in surfaces or []:
             self._append_surface_row(d)
@@ -1966,15 +2134,31 @@ class XSectionsDock(QgsDockWidget):
         row.changed.connect(self._on_surfaces_changed)
         row.moveRequested.connect(lambda step, r=row: self.move_surface(r, step))
         row.removeRequested.connect(lambda r=row: self.remove_surface(r))
+        row.editorToggled.connect(self._link_surface_cards)        # (0.3.6: a card; its band, its badge)
+        row.editorToggled.connect(row.sub_label.setBold)           # (open: its subtitle semibold, as the point rows)
+        row.checksChanged.connect(self._update_counts)
         self._surface_layout.addWidget(row)
         self.surface_rows.append(row)
+        self.grp_ground.body.watch(row)
         row.set_editor_open(open_editor)
+        self._link_surface_cards()
         return row
+
+    def _drop_surface_row(self, row: SurfaceRow) -> None:
+        self.grp_ground.body.unwatch(row)
+        self._surface_layout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
 
     def _renumber_surface_rows(self) -> None:
         n = len(self.surface_rows)
         for i, row in enumerate(self.surface_rows):
             row.set_position(i, n)
+        self._link_surface_cards()
+
+    def _link_surface_cards(self, *args) -> None:
+        """Space the Surfaces cards for their bands (widgets.link_cards; the ground row is always the first)."""
+        link_cards([self.ground_row] + list(getattr(self, "surface_rows", [])))
 
     def _on_surfaces_changed(self, *args) -> None:
         self._renumber_surface_rows()
@@ -2084,16 +2268,14 @@ class XSectionsDock(QgsDockWidget):
             return
         self.surface_rows.insert(j, self.surface_rows.pop(i))
         self._surface_layout.removeWidget(row)
-        self._surface_layout.insertWidget(2 + j, row)          # after the ground row and its editor
+        self._surface_layout.insertWidget(1 + j, row)          # after the ground row (one card, its editor in it)
         self._on_surfaces_changed()
 
     def remove_surface(self, row: SurfaceRow) -> None:
         if row not in self.surface_rows:
             return
         self.surface_rows.remove(row)
-        self._surface_layout.removeWidget(row)
-        row.setParent(None)
-        row.deleteLater()
+        self._drop_surface_row(row)
         self._on_surfaces_changed()
 
     # ---- per-row counts (the rows' "plotted / in the layer", their subtitles and Plotted explorations)
@@ -2121,11 +2303,112 @@ class XSectionsDock(QgsDockWidget):
                 and 0 <= getattr(h, "style_rank", -1) < len(st.items)})
         oinfos = list(getattr(model, "other_layers", None) or []) if model is not None else []
         points = list(getattr(model, "other_points", None) or []) if model is not None else []
+        areas = list(getattr(model, "other_areas", None) or []) if model is not None else []
         for j, row in enumerate(self.other_rows):
             if model is None or not (j < len(oinfos) and oinfos[j].on):
                 row.set_counts(None)
                 continue
-            row.set_counts(Counter(p.type_value for p in points if p.layer_index == j))
+            if getattr(oinfos[j], "kind", "point") == "polygon":         # (0.3.6: its pieces)
+                row.set_counts(Counter(a.type_value for a in areas if a.layer_index == j))
+            else:                                                         # its points, or crossings
+                row.set_counts(Counter(p.type_value for p in points if p.layer_index == j))
+
+    # ---- the rows' problems (0.3.6, D14: ui.problems)
+    def _update_problems(self, *args) -> None:
+        """Each card's problems from the last build (self.model; without one, only a row's missing layer): its badge,
+        its amber line and its card blocks (with a row's guess, from the row itself). The warnings they show
+        (self._mapped) stay out of the status line; the count chips follow; the check card closes when what its
+        badge shows changed."""
+        if getattr(self, "card_host", None) is None or not hasattr(self, "ground_row"):
+            return
+        model, host = self.model, self.card_host
+        open_badge = host.badge() if host.is_open() else None
+        before = list(getattr(open_badge, "blocks", None) or []) if open_badge is not None else None
+        # (a model built for other rows, just added, moved or removed: its explorations do not name these rows)
+        explo_model = model if self._model_fits(model, "point_layers", self.explo_rows) else None
+        other_model = model if self._model_fits(model, "other_layers", self.other_rows) else None
+        probs, e_cov = P.explo_problems(explo_model, [self._row_state(r, explo_model) for r in self.explo_rows])
+        for row, pr in zip(self.explo_rows, probs):
+            row.set_problems(pr)
+        prj = QgsProject.instance()
+        kinds = [feature_kind(prj.mapLayer(r.stored()["layer_id"]) if r.stored()["layer_id"] else None)
+                 for r in self.other_rows]
+        probs, o_cov = P.other_problems(other_model, [self._row_state(r) for r in self.other_rows], kinds)
+        for row, pr in zip(self.other_rows, probs):
+            row.set_problems(pr)
+        dem = self.dem_layer.currentLayer()
+        dem_name = (getattr(model, "dem_name", "") if model is not None else "") or (dem.name() if dem else "")
+        probs, g_cov = P.ground_problems(model, dem_name, lambda st: self._dist(st, self._settings))
+        self.ground_row.set_check(probs)
+        states = []
+        for i, row in enumerate(self.surface_rows, 1):
+            v = row.value()
+            lyr = row.layer()
+            lname = lyr.name() if lyr is not None else ""
+            name = row.name_label.text()
+            states.append(P.RowState(v, name, False, lname, labels=P.surface_labels(v, i, name, lname)))
+        probs, s_cov = P.surface_problems(model, states)
+        for row, pr in zip(self.surface_rows, probs):
+            row.set_check(pr)
+        self._mapped = e_cov | o_cov | g_cov | s_cov
+        self._update_counts()
+        if open_badge is not None:
+            try:
+                same = host.is_open() and host.badge() is open_badge and list(open_badge.blocks) == before
+            except RuntimeError:
+                same = False
+            if not same:
+                host.close()
+
+    @staticmethod
+    def _model_fits(model, attr: str, rows) -> bool:
+        """`model` was built for these rows: its infos (`attr`: point_layers, other_layers) name their layers in
+        order (a model made by hand without infos fits any rows)."""
+        infos = list(getattr(model, attr, None) or []) if model is not None else []
+        if not infos:
+            return True
+        return len(infos) == len(rows) and all(i.layer_id == r.stored()["layer_id"] for i, r in zip(infos, rows))
+
+    def _row_state(self, row, model=None) -> P.RowState:
+        """What ui.problems needs of a point row (exploration or Other features): its value, shown name, whether its
+        layer is missing, its layer's and table's names, and (with `model`) its table's bad values."""
+        v = row.value()
+        prj = QgsProject.instance()
+        raw = prj.mapLayer(v["layer_id"]) if v.get("layer_id") else None
+        lname = raw.name() if isinstance(raw, QgsVectorLayer) and raw.isValid() else ""
+        tbl = table_layer(v.get("wl_table_id", "")) if v.get("wl_table_id") else None
+        bad = self._table_bad(v, tbl, model) if model is not None and tbl is not None else ()
+        return P.RowState(v, row.name_label.text(), row.is_missing(), lname, tbl.name() if tbl is not None else "",
+                          (), bad)
+
+    @staticmethod
+    def _table_bad(v: dict, tbl: QgsVectorLayer, model) -> Tuple[Tuple[str, str], ...]:
+        """Up to CARD_ITEMS + 1 (exploration name, '"text"') of the rows of `tbl` (the water-level table of the row
+        `v`) whose level is a text but not a number, when the build warned about its level field (one read of its
+        name and level fields, without geometry)."""
+        field, name_field = v.get("wl_table_elev_field", ""), v.get("wl_table_name_field", "")
+        prefix = f"{tbl.name()}: "
+        if not field or not any(w.startswith(prefix) and f" in {field} " in w and "(left out)" in w
+                                for w in (model.warnings or [])):
+            return ()
+        fields = tbl.fields()
+        ni, ei = fields.indexOf(name_field), fields.indexOf(field)
+        if ei < 0:
+            return ()
+        req = QgsFeatureRequest().setFlags(Qgis.FeatureRequestFlag.NoGeometry)
+        req.setSubsetOfAttributes([i for i in (ni, ei) if i >= 0])
+        out: List[Tuple[str, str]] = []
+        for f in tbl.getFeatures(req):
+            text = not_number_text(f.attribute(ei))
+            if not text:
+                continue
+            name = f.attribute(ni) if ni >= 0 else None
+            is_null = getattr(name, "isNull", None)
+            name = "" if name is None or (callable(is_null) and is_null()) else str(name)
+            out.append((name, f'"{text}"'))
+            if len(out) > W.CARD_ITEMS:
+                break
+        return tuple(out)
 
     def _on_scale_changed(self, *args) -> None:
         if self._applying:
@@ -2154,9 +2437,11 @@ class XSectionsDock(QgsDockWidget):
         manual_grid = not self.grid_auto.isChecked()
         for w in (self.h_major, self.h_minor, self.v_major, self.v_minor):
             w.setEnabled(manual_grid)
+        self.grid_spacing_row.setHidden(not manual_grid)      # (0.3.6: shown only while the spacing is typed)
         manual_z = self.z_mode.currentData() == "manual"
         self.z_min.setEnabled(manual_z)
         self.z_max.setEnabled(manual_z)
+        self.z_range_row.setHidden(not manual_z)              # (0.3.6: Lowest | Highest only under Manual)
         self.below_in.setEnabled(not manual_z)
         self.allowed_sheets.setEnabled(self.sheet.currentData() == "smallest")
         # a custom page is sized to the drawing (no orientation, no fill); a manual range is drawn as typed
@@ -2301,18 +2586,15 @@ class XSectionsDock(QgsDockWidget):
             self.preview.draw(model, s, plan)
         self._update_readouts(model, plan, s)
         self.feedback.show_model(model, s, plan)
-        # (the readouts above show these; an other point's flag only when the Other points readout lists it: past
-        # its sixth, the message line has them)
-        covered = ({f"{h.label}: {fl}" for h in model.hits for fl in (h.flags or [])}
-                   | set(getattr(self, "_other_flags_shown", ()) or ())
-                   | {NO_POINTS})
-        notes = [w for w in (model.warnings or []) if w not in covered
-                 and not w.startswith(("Left out past the ends", "No DEM data along"))]   # already in readouts
-        notes = list(getattr(plan, "warnings", None) or []) + notes
+        # the rows' problems (0.3.6, ui.problems); what no row shows (and no readout note) goes to the status line
+        self._update_problems()
+        notes = P.status_warnings(model, plan, self._mapped)
         if plan is not None and not plan.fits:
             self._set_message(plan.message or "The section does not fit the chosen sheet.", ERROR_COLOR)
         elif notes:
             self._set_message(" ".join(notes), WARN_COLOR)
+        else:
+            self._sync_status()
 
     def _fail(self, text: str, s: Settings) -> None:
         self.model = self.plan = None
@@ -2323,9 +2605,10 @@ class XSectionsDock(QgsDockWidget):
             self.preview.show_message(text)
         for lab in (self.ground_readout, self.explo_readout, self.depth_readout, self.screens_readout,
                     self.other_readout, self.export_readout):
-            lab.hide()
+            lab.setWanted(False)
         self._update_type_counts(None)
         self.plotted.set_entries(None)
+        self._update_problems()
         geom, crs = self.current_line_geometry()
         factor = _crs_factor_to_ft(crs) if geom is not None else math.nan
         tol_units = s.tolerance_ft / factor if factor and not math.isnan(factor) else 0.0
@@ -2343,6 +2626,9 @@ class XSectionsDock(QgsDockWidget):
         self.refresh()
 
     def _set_message(self, text: str, color: str = ERROR_COLOR) -> None:
+        """The status line's message: a warning (amber) or an error (red); "" for none (then "Ready · ..." while a
+        section is built)."""
+        self._message_kind = "warn" if color == WARN_COLOR else "error"
         if color == WARN_COLOR:
             color = self._warn_color()
         elif color == ERROR_COLOR:
@@ -2350,6 +2636,17 @@ class XSectionsDock(QgsDockWidget):
         self.message.setText(text)
         self.message.setStyleSheet(f"QLabel {{ color: {color}; font-weight: 600; }}")
         self.message.setVisible(bool(text))
+        self._sync_status()
+
+    def _sync_status(self) -> None:
+        """The status line (0.3.6): its dot (error, warn, ok) and, without a message, what the sheet shows (ready_text);
+        hidden while there is neither."""
+        has_msg = bool(self.message.text())
+        ready = not has_msg and self.model is not None
+        self.status_text.setText(P.ready_text(self.model) if ready else "")
+        self.status_text.setVisible(ready)
+        self.status_dot.set_state(self._message_kind if has_msg else ("ok" if ready else ""))
+        self.status_bar.setVisible(has_msg or ready)
 
     # ---- readouts
     def _update_readouts(self, model, plan, s: Settings) -> None:
@@ -2413,7 +2710,7 @@ class XSectionsDock(QgsDockWidget):
                 xl.append(f"<span style='color:{warn}'>{_esc(w)}</span>")
             self._show_readout(self.export_readout, xl)
         else:
-            self.export_readout.hide()
+            self.export_readout.setWanted(False)
         self._update_chips(s)
 
     def _explo_lines(self, model, plan, s: Settings) -> List[str]:
@@ -2527,10 +2824,9 @@ class XSectionsDock(QgsDockWidget):
         return f"{self._dist(h.station, s)} · {off} ft {h.side}"
 
     def _other_lines(self, model, s: Settings) -> List[str]:
-        """The Other points readout: per row that is on, what is plotted, near, past the ends and left out for want
-        of an elevation; with up to 6 points, where each one sits; up to 6 of their flags (amber; the others in the
-        message line). Hidden without rows."""
-        self._other_flags_shown = set()
+        """The Other features readout: per row that is on, what is plotted (points, crossings or pieces), near, past
+        the ends and left out for want of an elevation; with up to 6 points, where each one sits; up to 6 of their
+        flags (amber; each is also its row's problem line, 0.3.6). Hidden without rows."""
         oinfos = list(getattr(model, "other_layers", None) or [])
         if not oinfos:
             return []
@@ -2541,6 +2837,9 @@ class XSectionsDock(QgsDockWidget):
         points = list(getattr(model, "other_points", None) or [])
         lines, flags = [], []
         for o in on:
+            if getattr(o, "kind", "point") == "polygon":                  # its pieces (brackets): no points
+                lines.append(f"{_esc(o.name)}: {o.plotted} plotted")
+                continue
             pts = [p for p in points if p.layer_index == o.index]
             head = f"{_esc(o.name)}: {len(pts)} plotted"
             if o.near:
@@ -2557,10 +2856,8 @@ class XSectionsDock(QgsDockWidget):
             flags += [(p.label, fl) for p in pts for fl in (p.flags or [])]
         for label, fl in flags[:LIST_MAX]:
             lines.append(f"<span style='color:{warn}'>{_esc(label)}: {_esc(fl)}</span>")
-        # the flags listed here stay out of the message line; the rest go there (refresh), so every one is shown
-        self._other_flags_shown = {f"{label}: {fl}" for label, fl in flags[:LIST_MAX]}
         if len(flags) > LIST_MAX:
-            lines.append(f"… and {len(flags) - LIST_MAX} more flags (in the message line below)")
+            lines.append(f"… and {len(flags) - LIST_MAX} more flags")
         return lines
 
     @staticmethod
@@ -2607,7 +2904,7 @@ class XSectionsDock(QgsDockWidget):
         """Line facts without a model (e.g. no DEM chosen yet)."""
         factor = _crs_factor_to_ft(crs) if geom is not None else math.nan
         if geom is None or math.isnan(factor):
-            self.line_readout.hide()
+            self.line_readout.setWanted(False)
             return
         verts = [v for v in geom.vertices()]
         a, b = verts[0], verts[-1]
@@ -2620,9 +2917,10 @@ class XSectionsDock(QgsDockWidget):
         self._show_readout(self.line_readout, lines)
 
     @staticmethod
-    def _show_readout(label: QLabel, lines: List[str]) -> None:
+    def _show_readout(label: Readout, lines: List[str]) -> None:
+        """A readout's lines (0.3.6: a Verbose note, shown with Verbose while it has something to say)."""
         label.setText(_html(lines))
-        label.setVisible(bool(lines))
+        label.setWanted(bool(lines))
 
     @staticmethod
     def _dist(st: float, s: Settings) -> str:
@@ -2641,7 +2939,8 @@ class XSectionsDock(QgsDockWidget):
 
     # ---- header chips
     def chip_texts(self, s: Optional[Settings] = None) -> Dict[str, Tuple[str, bool]]:
-        """(text, warn) of each section header's summary chip, by section object name suffix."""
+        """(text, warn) of each section header's summary chip: "line", "surfaces", "explorations", "other", "scale",
+        "style" (0.3.6: Depths and Screens & water are subsections, without chips)."""
         s = s if s is not None else self.settings()
         model, plan = self.model, self.plan
         out: Dict[str, Tuple[str, bool]] = {}
@@ -2673,25 +2972,14 @@ class XSectionsDock(QgsDockWidget):
             text = f"Ground + {n}" if n else "Ground"
             out["surfaces"] = ((f"{text} · {missing} missing", True) if missing else (text, False))
 
-        # explorations and other points: "None", a missing layer (amber), "Off", or what is plotted
+        # explorations and other features: "None", a missing layer (amber), "Off", or what is plotted (other
+        # features: points, crossings and pieces)
         out["explorations"] = self._rows_chip(self.explo_rows, lambda: len(model.hits) if model is not None else None)
         other_n = None
         if model is not None and getattr(model, "other_layers", None) is not None:
-            other_n = len(getattr(model, "other_points", None) or [])
+            other_n = (len(getattr(model, "other_points", None) or [])
+                       + len(getattr(model, "other_areas", None) or []))
         out["other"] = self._rows_chip(self.other_rows, lambda: other_n, named=True)
-
-        # depths
-        out["depths"] = (TOP_MODE_CHIPS.get(s.top_mode, "–") if s.depth_line else "Off", False)
-
-        # screens and water levels
-        if not s.screens:
-            out["screens"] = ("Off", False)
-        elif not self._screens_wanted(s) or model is None:
-            out["screens"] = ("–", False)
-        else:
-            n, measured, atd = screen_counts(model.hits)
-            m = measured + atd
-            out["screens"] = (f"{n} screen{'s' if n != 1 else ''} · {m} level{'s' if m != 1 else ''}", False)
 
         # scale and sheet: "100′ / 20′ · Letter"
         text = f"{fmt_scale(s.h_scale)}′ / {fmt_scale(s.v_scale)}′"
@@ -2744,10 +3032,23 @@ class XSectionsDock(QgsDockWidget):
         if not self.sections:
             return
         chips = self.chip_texts(s)
-        for sec, key in zip(self.sections, ("line", "surfaces", "explorations", "depths", "screens", "other", "scale",
-                                            "style")):
+        for sec, key in zip(self.sections, SECTION_KEYS):
             text, warn = chips[key]
             sec.setChip(text, warn)
+        self._update_counts()
+
+    def _update_counts(self, *args) -> None:
+        """The amber count chips (0.3.6, D14): the cards of Surfaces, Explorations and Other features with a badge (a
+        problem or a guess); none while the section's own chip is amber (it says what is wrong)."""
+        if not self.sections:
+            return
+        for sec, cards in ((self.grp_ground, [self.ground_row] + self.surface_rows), (self.grp_explo, self.explo_rows),
+                           (self.grp_other, self.other_rows)):
+            try:
+                n = 0 if sec.chipWarn() else sum(1 for c in cards if c.has_check())
+            except RuntimeError:              # (a row going away)
+                continue
+            sec.setProblems(n, f"{n} layer{'s' if n != 1 else ''} need{'s' if n == 1 else ''} a look" if n else "")
 
     # ================================================================ line helpers and actions
     def current_line_geometry(self) -> Tuple[Optional[QgsGeometry], QgsCoordinateReferenceSystem]:
@@ -3369,6 +3670,11 @@ class XSectionsDock(QgsDockWidget):
                 signal.disconnect(slot)
             except (TypeError, RuntimeError):
                 pass
+        try:
+            W.verbose_hub().changed.disconnect(self._on_verbose_changed)
+        except (TypeError, RuntimeError):
+            pass
+        self.card_host.close()
         self._hide_cursor()
         self._disconnect_hover()
         self.feedback.remove()

@@ -1,15 +1,25 @@
 """scripts/run_tests_parallel.py, the parallel test launcher: its reading of a unittest -v stream (made here by
 unittest itself, so the format is this Python's), a worker's exit status, what it runs again, the @timing_test tags it
 finds in the tree, the listing of the tests by unittest's loader and how it splits and balances along it, the check
-that every listed test ran, Ctrl+C, the golden refusal, the per-worker matplotlib folder; and fixtures'
-XSECTIONS_TIME_FACTOR. Nothing here starts a process or QGIS (main() runs with its processes replaced)."""
+that every listed test ran, Ctrl+C, the golden refusal, the per-worker matplotlib folder, a worker that prints its
+result and then does not end, one that exits without a result while a child of it holds its output, one past its
+deadline (the serial re-run's too), a listing process that does not end; and fixtures' XSECTIONS_TIME_FACTOR. Nothing
+here starts QGIS (main() runs with its processes replaced); only AWorkerThatDoesNotEnd and AListingThatDoesNotEnd
+start small Python processes of their own (a made-up result, start line or list, then a sleep or a child holding
+stdout), each ended by the test."""
 import contextlib
 import importlib.util
 import io
+import json
 import os
+import re
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -418,17 +428,21 @@ class Launcher(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.runs = []
 
-    def main(self, argv, outcome, listing=None):
-        """(exit status, printed text, the list_tests mock); outcome(names, what) -> (stream, exit status)."""
+    def main(self, argv, outcome, listing=None, lister=None):
+        """(exit status, printed text, the list_tests mock); outcome(names, what) -> (stream, exit status) or (stream,
+        exit status, {worker attribute: value} as run_all leaves them, e.g. for a worker that hung); lister: list_tests
+        in place of returning `listing`."""
         def run_all(ws, what):
             self.runs.append((what, [w.names for w in ws]))
             for w in ws:
-                text, rc = outcome(w.names, what)
+                text, rc, *more = outcome(w.names, what)
                 arrived(w, text)
                 w.returncode = rc
+                for name, value in (more[0] if more else {}).items():
+                    setattr(w, name, value)
                 w.result = P.Result(w)
         with mock.patch.object(P, "run_all", run_all), \
-                mock.patch.object(P, "list_tests", return_value=listing) as listed, \
+                mock.patch.object(P, "list_tests", return_value=listing, side_effect=lister) as listed, \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             rc = P.main(argv)
         return rc, out.getvalue(), listed
@@ -512,6 +526,158 @@ class Launcher(unittest.TestCase):
         self.assertEqual([what for what, _n in self.runs], ["worker", "serial"])
         self.assertIn("a timing test that passed alone: counted as passed", text)
 
+    class Stuck:
+        """A worker's process that has not ended (its handle never signalled)."""
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    def test_a_worker_that_hangs_after_its_result_fails_the_run(self):
+        hung = dict(cut_off=True, hung=True, proc=self.Stuck(), kill_note="killing it failed ([WinError 5] Access is "
+                                                                           "denied)")
+        rc, text, _l = self.two((self.ok(self.A, "A")[0], None, hung), self.ok(self.B, "B"))
+        self.assertEqual(rc, 1)
+        line = next(ln for ln in text.splitlines() if " HUNG AFTER ITS RESULT (OK): " in ln)
+        label = line.split()[1]
+        self.assertTrue(line.startswith(f"WORKER {label} HUNG AFTER ITS RESULT (OK): its process (PID 4242)"), line)
+        self.assertIn("killing it failed", line)
+        self.assertTrue(line.endswith(f"worker_{label}.log"), line)                  # its log
+        self.assertIn(f"exit none  OK BUT HUNG AFTER ITS RESULT  worker_{label}.log", text)
+        self.assertTrue(text.rstrip().endswith("FAILED (errors=1, hung workers=1)"), text[-300:])
+        self.assertFalse(P.DURATIONS.exists())                      # (nothing remembered from such a run)
+        # its temp folders stay (its process may still hold them), and the summary says so
+        keep = self.remove.call_args.kwargs["keep"]
+        self.assertEqual(len(keep), 1)
+        self.assertTrue(keep[0].startswith(self.remove.call_args[0][0]) and keep[0].endswith(f"_w{label}_"), keep)
+        self.assertIn(f"Temp folders of worker {label} left in place: its process (PID 4242) has not ended", text)
+
+    def timed_out(self):
+        """A worker as check_deadline leaves one it killed (its process not ended yet)."""
+        return dict(cut_off=True, timed_out=True, proc=self.Stuck(), kill_note="it was killed")
+
+    def test_a_worker_that_times_out_fails_the_run(self):
+        started = f"test_1 ({self.A}.A.test_1) ... "                  # its test started; no result came
+        with mock.patch.dict(os.environ, {"XSECTIONS_TIME_FACTOR": "3"}):         # (its deadline: 900 s x 3)
+            rc, text, _l = self.two((started, None, self.timed_out()), self.ok(self.B, "B"))
+        self.assertEqual(rc, 1)
+        line = next(ln for ln in text.splitlines() if " TIMED OUT: " in ln)
+        label = line.split()[1]
+        self.assertTrue(line.startswith(f"WORKER {label} TIMED OUT: its process (PID 4242) was still running 2700 s "
+                                        f"after its start (its deadline: 4 x its planned 0 s, at least 900 s, times "
+                                        f"its time factor); it was killed. The last test it started: "
+                                        f"{self.A}.A.test_1. See "), line)
+        self.assertTrue(line.endswith(f"worker_{label}.log"), line)                  # its log
+        self.assertIn(f"exit none  NO RESULT, TIMED OUT  worker_{label}.log", text)
+        self.assertTrue(text.rstrip().endswith("FAILED (errors=1, timed out workers=1)"), text[-300:])
+        self.assertNotIn("crashed workers", text)
+        self.assertFalse(P.DURATIONS.exists())                      # (nothing remembered from such a run)
+        # its temp folders stay (its process may still hold them), and the summary says so
+        keep = self.remove.call_args.kwargs["keep"]
+        self.assertEqual(len(keep), 1)
+        self.assertTrue(keep[0].startswith(self.remove.call_args[0][0]) and keep[0].endswith(f"_w{label}_"), keep)
+        self.assertIn(f"Temp folders of worker {label} left in place: its process (PID 4242) has not ended", text)
+        # one that printed OK, then went on printing past its deadline, fails the run all the same
+        rc, text, _l = self.two((self.ok(self.A, "A")[0], None, self.timed_out()), self.ok(self.B, "B"))
+        self.assertEqual(rc, 1)
+        self.assertIn("  OK, TIMED OUT  worker_", text)
+        self.assertTrue(text.rstrip().endswith("FAILED (errors=1, timed out workers=1)"), text[-300:])
+
+    def test_the_serial_re_run_has_a_deadline_too(self):
+        made = []
+
+        class Recording(P.Worker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                made.append(self)
+        for again, rc_again in ((f"test_find_explorations_budget ({self.TIMING}) ... ", None),
+                                (stream_of({self.TIMING: "ok"}), 0)):
+            # its target failed in parallel; run again, it is still running at its deadline (its test started again;
+            # or it printed OK, with exit code 0, and still went on): the target counts as FAILED, not rescued
+            def outcome(names, what):
+                if what == "serial":
+                    return again, rc_again, self.timed_out()
+                return stream_of({t: ("FAIL" if t == self.TIMING else "ok") for t in names}), int(self.TIMING in names)
+            made.clear()
+            with mock.patch.object(P, "Worker", Recording):
+                rc, text, _l = self.main(["--workers", "2", self.TIMING, self.OTHER], outcome,
+                                         self.listing({self.TIMING: [self.TIMING], self.OTHER: [self.OTHER]}))
+            self.assertEqual(rc, 1, text[-800:])
+            rerun = [w for w in made if w.label == "re-run"]
+            self.assertEqual(len(rerun), 1)
+            # its plan: make_units' estimates (from the times just remembered), the names unchanged
+            want = P.make_units([self.TIMING], P.discover_modules(), P.load_durations(), 1)
+            self.assertEqual([(u.name, u.estimate) for u in rerun[0].units], [(u.name, u.estimate) for u in want])
+            self.assertEqual(rerun[0].names, [self.TIMING])
+            self.assertGreater(rerun[0].planned, 0.0)
+            self.assertEqual(rerun[0].deadline, P.deadline_for(rerun[0].planned, 1.0))
+            self.assertRegex(text, re.escape(self.TIMING) + r"  \(worker \d; alone: FAILED; @timing_test\)\n")
+            self.assertIn(f"Serial re-run: TIMED OUT after {rerun[0].deadline:g} s (PID 4242; it was killed)  (", text)
+            self.assertNotIn("counted as passed", text)
+            self.assertTrue(text.rstrip().endswith("FAILED (failures=1, timed out workers=1)"), text[-300:])
+            P.DURATIONS.unlink()
+
+    def test_the_plan_shows_each_worker_s_deadline(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(P.main(["--plan", "--serial", "--time-factor", "1", self.TIMING]), 0)
+        self.assertRegex(out.getvalue(), r"(?m)^worker 1: about \d+ s \(deadline 900 s\)$")
+        with mock.patch.object(P, "list_tests", return_value=None), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(P.main(["--plan", "--workers", "2", "--time-factor", "3", self.A, self.B]), 0)
+        self.assertEqual(len(re.findall(r"(?m)^worker \d: about \d+ s \(deadline 2700 s\)$", out.getvalue())), 2)
+
+    def test_an_exit_code_read_while_the_process_had_not_ended(self):
+        late = dict(cut_off=True, exit_read="windows", proc=self.Stuck())
+        rc, text, _l = self.two((self.ok(self.A, "A")[0], 0, late), self.ok(self.B, "B"))
+        self.assertEqual(rc, 0, text[-800:])                         # its exit code agrees with its OK: it passed
+        self.assertRegex(text, r"NOTE: worker (\d)'s process did not end after its result \(Windows\); exit code 0 "
+                               r"used \(PID 4242")
+        self.assertRegex(text, r"Temp folders of worker \d left in place")
+        self.assertTrue(text.rstrip().endswith("OK"), text[-300:])
+        self.assertTrue(P.DURATIONS.exists())
+        # an exit code that disagrees with what it printed is a crash, as ever
+        rc, text, _l = self.two((self.ok(self.A, "A")[0], 3, dict(late)), self.ok(self.B, "B"))
+        self.assertEqual(rc, 1)
+        self.assertIn("ENDED WITH EXIT CODE 3 AFTER ITS RESULT", text)
+        self.assertIn("process did not end after its result (Windows); exit code 3 used", text)
+        self.assertTrue(text.rstrip().endswith("FAILED (errors=1, crashed workers=1)"), text[-300:])
+
+    def test_a_listing_process_that_has_not_ended(self):
+        # its list came whole; its process then did not end (its exit code read, or hung and not killable): the run
+        # uses the list and passes, notes it, and leaves its temp folder in place; it is no worker (no "hung workers")
+        listing = self.listing({self.A: [f"{self.A}.A.test_1"], self.B: [f"{self.B}.B.test_1"]})
+        for state, note in ((dict(exit_read="windows", returncode=0),
+                             "NOTE: the listing process (PID 4242) did not end after its list (Windows); exit code 0 "
+                             "used."),
+                            (dict(hung=True, kill_note="killing it failed ([WinError 5] Access is denied)"),
+                             "NOTE: the listing process (PID 4242) printed its list, then nothing for")):
+            def lister(names, env, log_path=None, keep=None):
+                w = P.Lister(names, os.devnull, env)
+                w.proc, w.cut_off = self.Stuck(), True
+                for name, value in state.items():
+                    setattr(w, name, value)
+                keep.append(w)
+                return listing
+            self.remove.reset_mock()
+            rc, text, listed = self.main(["--workers", "2", self.A, self.B],
+                                         lambda names, what: self.ok(names[0], names[0][-1].upper()), lister=lister)
+            self.assertEqual(rc, 0, text[-800:])
+            self.assertIsInstance(listed.call_args.kwargs["keep"], list)
+            self.assertIn(note, text)
+            self.assertIn("Temp folders of the listing process left in place: its process (PID 4242) has not ended",
+                          text)
+            self.assertNotIn("hung workers", text)
+            self.assertTrue(text.rstrip().endswith("OK"), text[-300:])
+            keep = self.remove.call_args.kwargs["keep"]
+            self.assertEqual(keep, [self.remove.call_args[0][0] + "list_"])
+        # --plan: the same (its temp folder stays while its process has not ended)
+        self.remove.reset_mock()
+        with mock.patch.object(P, "list_tests", side_effect=lister), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(P.main(["--plan", "--workers", "2", self.A, self.B]), 0)
+        tag = self.remove.call_args[0][0]
+        self.assertTrue(tag.startswith("plan_"), tag)
+        self.assertEqual(self.remove.call_args.kwargs["keep"], [tag])
+        self.assertIn("Temp folders of the listing process left in place", out.getvalue())
+
     def test_ctrl_c_ends_the_workers_and_removes_their_temp_folders(self):
         procs = []
 
@@ -535,6 +701,351 @@ class Launcher(unittest.TestCase):
         self.remove.assert_called_once()
         self.assertTrue(self.remove.call_args[0][0].startswith("run_"))
         self.assertIn("INTERRUPTED", out.getvalue())
+
+
+def end_process(w):
+    """End what a Worker (or Lister) left running (its process, the child it reported on a "CHILD <pid>" line), then
+    its pump (its log is closed)."""
+    found = [int(n) for n in re.findall(r"^CHILD (\d+)\r?$", w.output()[0], re.M)]
+    for pid in found:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    if w.proc is not None and w.proc.poll() is None:
+        with contextlib.suppress(OSError):
+            w.proc.kill()
+    if w.thread is not None:
+        w.thread.join(15)
+
+
+# a child that holds a script's stdout for a minute (as a process a test started might), its PID on a line of its own
+HOLD = ("g = subprocess.Popen([sys.executable, '-B', '-c', 'import time; time.sleep(60)'], stdout=sys.stdout, "
+        "stderr=subprocess.STDOUT)\nprint(f'\\nCHILD {g.pid}', flush=True)")
+
+
+class AWorkerThatDoesNotEnd(unittest.TestCase):
+    """A worker that prints unittest's final result while its output then stays open (once, a worker's python3.exe
+    stayed stuck in Windows' tear-down after unittest's sys.exit, its pipe open, and the launcher waited for ever).
+    The workers here are small Python scripts: a made-up -v result (written by unittest here), then a sleep holding
+    stdout, or a child that holds it while the script exits with a code; or a test's start line and no result (a
+    worker that dies, or one stuck in its test until its deadline). Graces and deadlines of a second or two."""
+
+    RESULT = stream_of({f"{MOD}.A.test_1": "ok"})              # "... ok", "Ran 1 test in 0.000s", "OK"
+    STARTED = f"test_1 ({MOD}.A.test_1) ... "                   # a test's start line, and nothing after it
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xsec_hang_"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.n = 0
+
+    def worker(self, before="", after="", grace=0.5, exit_grace=1.0, printed=RESULT):
+        """A Worker whose process runs `before`, writes `printed` (RESULT) to its stdout, then runs `after`."""
+        self.n += 1
+        script = self.dir / f"child_{self.n}.py"
+        script.write_text(f"import subprocess, sys, time\n{before}\nsys.stdout.write({printed!r})\n"
+                          f"sys.stdout.flush()\n{after}\n", encoding="utf-8")
+        w = P.Worker(str(6 + self.n), [P.Unit(MOD)], self.dir / f"worker_{self.n}.log",
+                     dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        w.cmd = [sys.executable, "-B", str(script)]
+        w.result_grace, w.exit_grace = grace, exit_grace
+        self.addCleanup(self.end, w)
+        return w
+
+    def end(self, w):
+        end_process(w)
+
+    def run_all(self, *ws):
+        t0 = time.perf_counter()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            P.run_all(list(ws), "worker")
+        return out.getvalue(), time.perf_counter() - t0
+
+    def test_the_final_result_in_a_stream(self):
+        ok = self.RESULT
+        for text in (ok, ok.replace("\n", "\r\n"), verbose_stream(), stream_of({})):    # OK, FAILED (..), NO TESTS RAN
+            self.assertTrue(P.printed_result(text), text[-80:])
+        for text in ("", ok[:ok.index("Ran ")], ok[:ok.rindex("OK")]):                  # no "Ran", or no verdict yet
+            self.assertFalse(P.printed_result(text), text[-80:])
+
+    def test_new_output_starts_the_wait_again(self):
+        class Running:
+            pid = 99
+
+            def poll(self):
+                return None
+        w = P.Worker("1", [P.Unit(MOD)], os.devnull, {})
+        w.proc, w.result_grace, w.exit_grace = Running(), 5.0, 10.0
+        w._parts, w.last_output = [self.RESULT[:self.RESULT.index("Ran ")]], 100.0      # quiet, but no result
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(P.check_open(w, 200.0))
+            self.assertIsNone(w.waiting_since)
+            w._parts = [self.RESULT]                                    # its result, quiet for 100 s, no exit status
+            self.assertFalse(P.check_open(w, 200.0))
+            self.assertEqual(w.waiting_since, 200.0)
+            self.assertIn("worker 1 printed its result 100 s ago and its process (PID 99) has not ended",
+                          out.getvalue())
+            w.last_output = 203.0                                       # something more came: not quiet any more
+            self.assertFalse(P.check_open(w, 204.0))
+            self.assertIsNone(w.waiting_since)
+            self.assertFalse(P.check_open(w, 209.0))                   # quiet again: the wait starts again
+            self.assertEqual(w.waiting_since, 209.0)
+            self.assertFalse(P.check_open(w, 218.0))
+        self.assertFalse(w.hung or w.cut_off)
+
+    def test_a_result_then_no_exit_status_is_a_hung_worker(self):
+        w = self.worker(after="time.sleep(120)")
+        printed, took = self.run_all(w)
+        self.assertLess(took, 30.0)                                     # (never an endless wait)
+        self.assertTrue(w.hung and w.cut_off, printed)
+        self.assertIsNone(w.returncode)
+        self.assertEqual((w.result.verdict, w.result.counts["run"]), ("OK", 1))
+        self.assertFalse(w.result.exit_ok(w.returncode))               # (so main counts it as failed)
+        self.assertEqual(w.kill_note, "it was killed")
+        self.assertFalse(P.process_alive(w.proc))
+        self.assertIn("has not ended: waiting up to 1 s more", printed)
+        self.assertIn(f"OK, but HUNG after its result: no exit status (PID {w.proc.pid}; it was killed)", printed)
+        self.assertIn(f"WORKER {w.label} HUNG AFTER ITS RESULT (OK): its process (PID {w.proc.pid})", P.hung_text(w))
+        self.assertIn(str(w.log_path), P.hung_text(w))
+
+    def test_a_result_then_an_exit_code_with_the_output_still_open(self):
+        # the script exits with a code while a child of it holds its stdout: the exit code is used
+        spawn = ("g = subprocess.Popen([sys.executable, '-B', '-c', 'import time; time.sleep(60)'], stdout=sys.stdout, "
+                 "stderr=subprocess.STDOUT)\nprint(f'CHILD {g.pid}', flush=True)")
+        for code in (0, 3):
+            w = self.worker(before=spawn, after=f"sys.exit({code})", grace=2.0)
+            printed, took = self.run_all(w)
+            self.assertLess(took, 30.0)
+            self.assertFalse(w.done(), "the child should still hold the pipe")
+            self.assertEqual((w.returncode, w.exit_read, w.hung), (code, "ended", False), printed)
+            self.assertEqual(w.result.verdict, "OK")
+            self.assertEqual(w.result.exit_ok(w.returncode), code == 0)
+            self.assertIn(f"exit code {code} used", P.worker_state(w))
+            self.end(w)
+            self.assertTrue(w.done())
+
+    def test_an_exit_code_while_the_process_has_not_ended(self):
+        # as in the run that hung: Windows had set the exit code (0), the process never finished ending
+        w = self.worker(after="time.sleep(120)")
+
+        def exit_code_now(proc):                # (set after its result: one before it would be a crash without one)
+            return (0, False) if P.printed_result(w.output()[0]) else (None, False)
+        with mock.patch.object(P, "exit_code_now", side_effect=exit_code_now):
+            printed, took = self.run_all(w)
+        self.assertLess(took, 30.0)
+        self.assertEqual((w.returncode, w.exit_read, w.hung), (0, "windows", False))
+        self.assertTrue(w.result.exit_ok(w.returncode))
+        self.assertEqual(P.late_exit_note(w), f"worker {w.label}'s process did not end after its result (Windows); "
+                                              f"exit code 0 used")
+        self.assertIn(P.late_exit_note(w), printed)
+        # its process has not ended: its temp folders stay
+        self.assertTrue(P.process_alive(w.proc))
+        self.assertEqual([x for x, _p in P.held_temp([w])], [w])
+
+    def test_a_worker_that_dies_without_a_result_while_a_child_holds_its_output(self):
+        # its test started, a child of it took its stdout, and it exited (3) without unittest's result: its pipe stays
+        # open while the child lives; result_grace s of quiet later its exit code is used, a crash without a result
+        w = self.worker(printed=self.STARTED, after=f"{HOLD}\nsys.exit(3)")
+        printed, took = self.run_all(w)
+        self.assertLess(took, 15.0)                                     # (never an endless wait)
+        self.assertFalse(w.done(), "the child should still hold the pipe")
+        self.assertEqual((w.returncode, w.exit_read, w.cut_off, w.hung, w.timed_out), (3, "ended", True, False, False),
+                         printed)
+        self.assertFalse(w.result.finished)
+        self.assertEqual(w.result.tests[-1][:2], [f"{MOD}.A.test_1", "crashed"])
+        self.assertFalse(w.result.exit_ok(w.returncode))               # (so main counts it as crashed)
+        state = "ended without a result (exit code 3) (its output was still open: held by a process it started?)"
+        self.assertEqual(P.worker_state(w), state)
+        self.assertIn(state, printed)
+        self.assertEqual(P.late_exit_note(w), f"worker {w.label}'s process ended (exit code 3) without unittest's "
+                                              f"result, its output held open (by a process it started?)")
+
+    def test_a_worker_past_its_deadline_is_killed(self):
+        # its test started and never ends (a sleep, nothing else holding its output): killed at its deadline
+        w = self.worker(printed=self.STARTED, after="time.sleep(120)")
+        w.deadline = 2.0
+        printed, took = self.run_all(w)
+        self.assertLess(took, 2.0 + P.KILL_WAIT + 10.0)
+        self.assertEqual((w.timed_out, w.cut_off, w.hung, w.kill_note), (True, True, False, "it was killed"), printed)
+        self.assertFalse(P.process_alive(w.proc))
+        self.assertIsNone(w.returncode)
+        self.assertFalse(w.result.finished)
+        self.assertFalse(w.result.exit_ok(w.returncode))
+        self.assertTrue(P.worker_state(w).startswith("TIMED OUT after 2 s (PID"), P.worker_state(w))
+        self.assertIn(f"TIMED OUT after 2 s (PID {w.proc.pid}; it was killed)", printed)
+        text = P.timed_out_text(w)
+        self.assertTrue(text.startswith(f"WORKER {w.label} TIMED OUT: its process (PID {w.proc.pid}) was still "
+                                        f"running 2 s after its start"), text)
+        self.assertIn(f"; it was killed. The last test it started: {MOD}.A.test_1. ", text)
+        self.assertTrue(text.endswith(f"See {w.log_path}"), text)
+        # its process had already exited (no result, a child of it holding its output; result_grace longer than the
+        # deadline): not killed, its exit code kept, and said so
+        w = self.worker(before=HOLD, after="sys.exit(0)", grace=10.0, printed="")
+        w.deadline = 2.0
+        printed, took = self.run_all(w)
+        self.assertLess(took, 2.0 + 10.0)
+        self.assertEqual((w.timed_out, w.returncode, w.exit_read, w.hung), (True, 0, None, False), printed)
+        self.assertEqual(w.kill_note, "it had already exited (exit code 0); another process held its output")
+        self.assertEqual(P.worker_state(w), f"TIMED OUT after 2 s (PID {w.proc.pid}; {w.kill_note})")
+        self.assertIn(f"; {w.kill_note}. The last test it started: (none had started). ", P.timed_out_text(w))
+
+    def test_the_deadline_from_the_plan(self):
+        # max(WORKER_DEADLINE_MIN, WORKER_DEADLINE_K x its units' estimates) x its time factor
+        w = P.Worker("1", [P.Unit(MOD, estimate=10.0), P.Unit(f"{MOD}.B", estimate=20.0)], os.devnull,
+                     {"XSECTIONS_TIME_FACTOR": "3"})
+        self.assertEqual((w.planned, w.deadline, w.timed_out), (30.0, 2700.0, False))
+        self.assertEqual(P.Worker("2", [P.Unit(MOD, estimate=400.0)], os.devnull, {}).deadline, 1600.0)
+        self.assertEqual(P.deadline_for(400.0, 1.0), 1600.0)
+        lister = P.Lister([MOD], os.devnull, {})
+        self.assertIsNone(lister.deadline)
+        self.assertEqual((P.Worker.cut_without_result, P.Lister.cut_without_result), (True, False))
+        # nothing is done before it, for a worker that has ended, or for the listing process
+        self.assertFalse(P.check_deadline(w, w.t0 + 2699.0))
+        ended = threading.Thread(target=lambda: None)
+        ended.start()
+        ended.join()
+        w.thread = ended
+        self.assertFalse(P.check_deadline(w, w.t0 + 1e6))
+        self.assertFalse(P.check_deadline(lister, 1e6))
+        self.assertFalse(w.timed_out or w.cut_off or lister.timed_out or lister.cut_off)
+
+    @unittest.skipUnless(os.name == "nt", "GetExitCodeProcess and WaitForSingleObject: Windows")
+    def test_exit_code_read_without_waiting(self):
+        import _winapi
+        quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        done = subprocess.Popen([sys.executable, "-B", "-c", "import sys; sys.exit(7)"], **quiet)
+        self.addCleanup(done.wait, 30)
+        _winapi.WaitForSingleObject(int(done._handle), 30000)          # it has ended; Popen has not looked yet
+        with mock.patch.object(done, "poll", return_value=None):       # as if its handle were never signalled
+            self.assertEqual(P.exit_code_now(done), (7, False))
+        self.assertFalse(P.process_alive(done))
+        self.assertEqual(P.exit_code_now(done), (7, True))
+        running = subprocess.Popen([sys.executable, "-B", "-c", "import time; time.sleep(60)"], **quiet)
+        self.addCleanup(running.wait, 30)
+        self.addCleanup(running.kill)
+        self.assertEqual(P.exit_code_now(running), (None, False))      # STILL_ACTIVE
+        self.assertTrue(P.process_alive(running))
+        running.kill()
+        running.wait(30)
+        self.assertFalse(P.process_alive(running))
+
+
+class AListingThatDoesNotEnd(unittest.TestCase):
+    """list_tests, the listing process replaced by a small script (this script's path patched): it is never waited for
+    without end. Before, subprocess.run(timeout=LIST_TIMEOUT) did not bound it on Windows: after the timeout's kill it
+    waited for the pipe's end, which a listing process stuck in Windows' tear-down never gives. LIST_GRACE, EXIT_GRACE
+    and LIST_TIMEOUT of a second or a few."""
+
+    LIST = P.LIST_MARK + json.dumps({"ids": {MOD: [f"{MOD}.A.test_1", f"{MOD}.A.test_2"]}, "parts": {}})
+    # a child that holds the script's stdout (as a process stuck in its tear-down would hold its own) for a minute
+    HOLD = ("g = subprocess.Popen([sys.executable, '-B', '-c', 'import time; time.sleep(60)'], stdout=sys.stdout, "
+            "stderr=subprocess.STDOUT)\nprint(f'CHILD {g.pid}', flush=True)")
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="xsec_lister_"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.n = 0
+        self.grace(list_grace=0.5, exit_grace=1.0, timeout=30.0)
+
+    def grace(self, list_grace, exit_grace, timeout):
+        for name, value in (("LIST_GRACE", list_grace), ("EXIT_GRACE", exit_grace), ("LIST_TIMEOUT", timeout)):
+            patcher = mock.patch.object(P, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def list_tests(self, body):
+        """list_tests with a script running `body` (LIST: the listing's line) as the listing process: (the Listing or
+        None, its Lister, what list_tests printed, how long it took)."""
+        self.n += 1
+        script = self.dir / f"lister_{self.n}.py"
+        script.write_text(f"import subprocess, sys, time\nLIST = {self.LIST!r}\n{body}\n", encoding="utf-8")
+        keep = []
+        self.addCleanup(lambda: [end_process(w) for w in keep])
+        t0 = time.perf_counter()
+        with mock.patch.object(P, "__file__", str(script)), contextlib.redirect_stdout(io.StringIO()) as out:
+            listing = P.list_tests([MOD], dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), self.dir / f"list_{self.n}.log",
+                                   keep=keep)
+        took = time.perf_counter() - t0
+        self.assertEqual(len(keep), 1)
+        self.assertEqual(keep[0].cmd[1:3], [str(script), P.LIST_FLAG])
+        return listing, keep[0], out.getvalue(), took
+
+    def assert_listed(self, listing):
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing.ids, {MOD: [f"{MOD}.A.test_1", f"{MOD}.A.test_2"]})
+
+    def test_a_listing_that_ends_as_usual(self):
+        listing, w, printed, took = self.list_tests("print('importing ...')\nprint('\\n' + LIST, flush=True)")
+        self.assert_listed(listing)
+        self.assertLess(took, 15.0)
+        self.assertEqual((w.returncode, w.cut_off, w.stopped, w.note(), printed), (0, False, False, "", ""))
+        self.assertIn(self.LIST, w.log_path.read_text(encoding="utf-8"))           # (its log, as it came)
+        self.assertEqual(P.held_temp([w]), [])                                    # (it has ended: nothing kept)
+
+    def test_its_list_then_a_child_holds_its_output(self):
+        # it exits 0 after its list while a child of it holds the pipe: LIST_GRACE s later its exit code is used
+        listing, w, printed, took = self.list_tests(f"print(LIST, flush=True)\n{self.HOLD}\nsys.exit(0)")
+        self.assert_listed(listing)
+        self.assertLess(took, 15.0)                                               # (LIST_TIMEOUT is 30 s here)
+        self.assertFalse(w.done(), "the child should still hold the pipe")
+        self.assertEqual((w.returncode, w.exit_read, w.hung, w.stopped), (0, "ended", False, False))
+        self.assertIn(f"(NOTE: the listing process (PID {w.proc.pid}) had ended, but its output stayed open after its "
+                      f"list (held by a process it started?); exit code 0 used)", printed)
+        self.assertNotIn("could not be listed", printed)
+
+    def test_its_list_then_no_exit_status_is_killed(self):
+        listing, w, printed, took = self.list_tests("print(LIST, flush=True)\ntime.sleep(120)")
+        self.assert_listed(listing)                                               # (its whole list is used)
+        self.assertLess(took, 20.0)
+        self.assertTrue(w.hung and w.cut_off and not w.stopped)
+        self.assertEqual(w.kill_note, "it was killed")
+        self.assertFalse(P.process_alive(w.proc))
+        self.assertIn("(the listing process printed its list ", printed)
+        self.assertIn("has not ended: waiting up to 1 s more)", printed)
+        self.assertIn(f"(NOTE: the listing process (PID {w.proc.pid}) printed its list, then nothing for 0.5 s with its "
+                      f"output still open, and still had no exit status 1 s later; it was killed; its list is used)",
+                      printed)
+
+    def test_an_exit_code_while_it_has_not_ended(self):
+        # as worker PID 63256: Windows had set the exit code (0), the process never finished ending
+        with mock.patch.object(P, "exit_code_now", return_value=(0, False)):
+            listing, w, printed, took = self.list_tests("print(LIST, flush=True)\ntime.sleep(120)")
+        self.assert_listed(listing)
+        self.assertLess(took, 15.0)
+        self.assertEqual((w.returncode, w.exit_read, w.hung), (0, "windows", False))
+        self.assertIn(f"(NOTE: the listing process (PID {w.proc.pid}) did not end after its list (Windows); exit code 0 "
+                      f"used)", printed)
+        # its process has not ended: its temp folder stays, and the summary says so
+        self.assertTrue(P.process_alive(w.proc))
+        self.assertEqual([x for x, _p in P.held_temp([w])], [w])
+        self.assertTrue(P.held_lines(P.held_temp([w]))[0].startswith(
+            f"Temp folders of the listing process left in place: its process (PID {w.proc.pid}) has not ended"))
+
+    def test_no_list_and_its_output_held_is_given_up_after_list_timeout(self):
+        self.grace(list_grace=0.5, exit_grace=1.0, timeout=2.0)
+        # it prints nothing and sleeps, its pipe open: killed LIST_TIMEOUT s after its start, no list
+        listing, w, printed, took = self.list_tests("time.sleep(120)")
+        self.assertIsNone(listing)
+        self.assertLess(took, 2.0 + P.KILL_WAIT + 5.0)
+        self.assertTrue(w.stopped)
+        self.assertEqual(w.kill_note, "it was killed")
+        self.assertIn(f"the listing process (PID {w.proc.pid}) had not ended 2 s after its start; it was killed",
+                      printed)
+        self.assertIn("(the tests could not be listed (exit code none: stopped after 2 s); see ", printed)
+        # it exits (4) without a list, a child of it holding the pipe: given up then too, its exit code reported
+        listing, w, printed, took = self.list_tests(f"{self.HOLD}\nsys.exit(4)")
+        self.assertIsNone(listing)
+        self.assertLess(took, 2.0 + 5.0)
+        self.assertEqual((w.stopped, w.stopped_rc, w.kill_note), (True, 4, None))
+        self.assertIn("(the tests could not be listed (exit code 4); see ", printed)
+
+    def test_its_list_with_its_output_held_is_bounded_by_list_timeout_too(self):
+        # the review's case: LIST_GRACE longer than LIST_TIMEOUT; its list came whole, then a child holds the pipe
+        self.grace(list_grace=10.0, exit_grace=1.0, timeout=2.0)
+        listing, w, printed, took = self.list_tests(f"print(LIST, flush=True)\n{self.HOLD}\nsys.exit(0)")
+        self.assert_listed(listing)
+        self.assertLess(took, 2.0 + 5.0)
+        self.assertEqual((w.stopped, w.stopped_rc), (True, 0))
+        self.assertIn(f"the listing process (PID {w.proc.pid}) had exited (exit code 0), but its output was still open "
+                      f"2 s after its start", printed)
 
 
 class Verdict(unittest.TestCase):
@@ -616,6 +1127,22 @@ class WorkerEnvironment(unittest.TestCase):
         self.assertEqual(P.remove_run_temp("run_test_tag_"), 2)
         self.assertEqual([os.path.isdir(p) for p in mine + [other]], [False, False, True])
         self.assertEqual(P.remove_run_temp(""), 0)
+
+    def test_run_temp_of_a_process_that_has_not_ended_stays(self):
+        # each worker's folders carry its own tag (the run's, then w<n>_): those of a worker whose process has not
+        # ended stay; worker 1's tag is not the beginning of worker 12's
+        tmp = tempfile.gettempdir()
+        w1, w12, w2 = (tempfile.mkdtemp(prefix=f"xsec_run_run_test_keep_{k}_", dir=tmp) for k in ("w1", "w12", "w2"))
+        for p in (w1, w12, w2):
+            self.addCleanup(shutil.rmtree, p, True)
+        self.assertEqual(P.run_temp("run_test_keep_w1_"), [Path(w1)])
+        self.assertEqual(P.remove_run_temp("run_test_keep_", keep=["run_test_keep_w1_"]), 2)
+        self.assertEqual([os.path.isdir(p) for p in (w1, w12, w2)], [True, False, False])
+        env = P.worker_env(3.0, None, "run_x_w4_")
+        w = P.Worker("4", [P.Unit(MOD)], os.devnull, env)
+        self.assertEqual((w.tag, w.result_grace, w.exit_grace), ("run_x_w4_", 3 * P.RESULT_GRACE, P.EXIT_GRACE))
+        self.assertEqual(P.Worker("5", [P.Unit(MOD)], os.devnull, P.worker_env(1.0, None)).result_grace,
+                         P.RESULT_GRACE)
 
     def test_own_matplotlib_folder(self):
         tmp = Path(tempfile.mkdtemp(prefix="xsec_mpl_"))

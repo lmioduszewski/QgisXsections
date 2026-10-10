@@ -32,6 +32,7 @@ from xsections.ui.mf6_dialog import (BOTTOM_COLOR, HEAD_COLOR, LAST_DIR_KEY, WT_
                                      ModelSurfaceRow, crs_text, default_name, fill_time_combo, fmt_time, load_model,
                                      model_stem, model_surfaces, parse_time, ramp, ranges, time_items, time_words,
                                      times_summary)
+from xsections.ui import widgets as W  # noqa: E402
 from xsections.ui.widgets import SegmentedControl, SurfaceRow  # noqa: E402
 
 MF6_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "mf6")
@@ -136,10 +137,10 @@ class SectionTests(PanelCase):
     def test_sections_in_order_and_named(self):
         d = self.dock
         self.assertEqual([s.title() for s in d.sections],
-                         ["Line", "Surfaces", "Explorations", "Depths", "Screens & water", "Other points",
-                          "Scale & sheet", "Sheet style"])
-        self.assertEqual(d.sections, [d.grp_line, d.grp_ground, d.grp_explo, d.grp_depth, d.grp_screens,
-                                      d.grp_other, d.grp_export, d.grp_style])
+                         ["Line", "Surfaces", "Explorations", "Other features", "Scale & sheet", "Sheet style"])
+        self.assertEqual(d.sections, [d.grp_line, d.grp_ground, d.grp_explo, d.grp_other, d.grp_export, d.grp_style])
+        # (0.3.6: Depths and Water & screens are subsections of Explorations)
+        self.assertTrue(d.grp_explo.isAncestorOf(d.grp_depth) and d.grp_explo.isAncestorOf(d.grp_screens))
         r = explo_row(d)
         # every widget sits in its section (readouts included)
         for grp, widgets in ((d.grp_line, (d.line_layer, d.btn_pick, d.btn_reverse, d.btn_save_line, d.line_readout)),
@@ -172,7 +173,7 @@ class SectionTests(PanelCase):
         d.restore_from_project()
         self.assertTrue(all(s.isCollapsed() for s in d.sections))
         self.assertFalse(any(m.isExpanded() for m in d._disclosures))
-        d.grp_depth.setCollapsed(False)
+        d.grp_explo.setCollapsed(False)
         d.project_cleared()
         self.assertTrue(all(s.isCollapsed() for s in d.sections))
         # closed -> open: closed again; any number may be open meanwhile
@@ -201,7 +202,7 @@ class SectionTests(PanelCase):
 
     def test_open_state_is_never_saved(self):
         d = self.dock
-        d.grp_screens.setCollapsed(False)
+        d.grp_explo.setCollapsed(False)
         d.tolerance.setValue(77.0)
         d.save_settings()
         self.assertNotIn("collapsed", settings_store.stored_json(self.prj).lower())
@@ -233,8 +234,6 @@ class ChipTests(PanelCase):
         self.assertEqual(c["Line"], ("A–A′ · 4,588 ft", False))
         self.assertEqual(c["Surfaces"], ("Ground", False))
         self.assertEqual(c["Explorations"], ("2 plotted", False))
-        self.assertEqual(c["Depths"], ("Table, else LIDAR", False))
-        self.assertEqual(c["Screens & water"], ("2 screens · 3 levels", False))     # fields guessed
         self.assertEqual(c["Scale & sheet"], ("1,000′ / 50′ · Letter", False))
         self.assertEqual(c["Sheet style"], ("Defaults", False))
         # the chips follow the widgets
@@ -246,14 +245,8 @@ class ChipTests(PanelCase):
         d.grid_color.setCurrentIndex(d.grid_color.findData("gray"))
         c = self.chips()
         self.assertEqual(c["Surfaces"], ("Ground + 1", False))         # visible surfaces only
-        self.assertEqual(c["Depths"], ("Off", False))
-        self.assertEqual(c["Screens & water"], ("Off", False))
         self.assertEqual(c["Sheet style"], ("Gray grid", False))
         d.depth_line.setChecked(True)
-        d.top_mode.setCurrentIndex(d.top_mode.findData("dem"))
-        self.assertEqual(self.chips()["Depths"], ("LIDAR", False))
-        d.top_mode.setCurrentIndex(d.top_mode.findData("field"))
-        self.assertEqual(self.chips()["Depths"], ("Table only", False))
         # tiled, and a plan that does not fit
         self.stub(model=screen_model(), plan=fake_plan(tiled=True))
         d.h_scale.setEditText("100")
@@ -271,8 +264,7 @@ class ChipTests(PanelCase):
             c.setField("")
         self.stub()
         d.refresh()
-        self.assertEqual(self.chips()["Screens & water"], ("–", False))
-        self.assertTrue(d.screens_readout.isHidden())
+        self.assertFalse(d.screens_readout.wanted())                  # (0.3.6: nothing to say, even with Verbose)
 
     def test_empty_project(self):
         self.prj.clear()
@@ -282,8 +274,6 @@ class ChipTests(PanelCase):
         self.assertEqual(c["Line"], ("Choose a line", True))
         self.assertEqual(c["Surfaces"], ("Choose a DEM", True))
         self.assertEqual(c["Explorations"], ("None", False))
-        self.assertEqual(c["Depths"], ("Table, else LIDAR", False))
-        self.assertEqual(c["Screens & water"], ("–", False))
         self.assertEqual(c["Scale & sheet"], ("1,000′ / 50′", False))
         self.assertEqual(c["Sheet style"], ("Defaults", False))
         d.restore_from_project()                                      # a new, empty project
@@ -447,7 +437,7 @@ class SurfaceTests(PanelCase):
         r2.act_up.trigger()                                            # Move up (the ⋯ menu)
         self.assertEqual(d.surface_rows, [r2, r1])
         self.assertEqual([x["layer_id"] for x in d.settings().surfaces], [self.dem.id(), wt.id()])
-        self.assertEqual(d._surface_layout.indexOf(r2), 2)            # under the ground row and its editor
+        self.assertEqual(d._surface_layout.indexOf(r2), 1)            # under the ground row (0.3.6: one card)
         r2.act_down.trigger()
         self.assertEqual(d.surface_rows, [r1, r2])
         r1.act_remove.trigger()
@@ -655,6 +645,8 @@ class ScreenTests(PanelCase):
 
     def test_readout(self):
         d = self.dock
+        W.set_verbose(True)                                           # (0.3.6: the readouts are Verbose notes)
+        self.addCleanup(W.set_verbose, False)
         self.stub(model=screen_model())
         d.refresh()
         text = d.screens_readout.text()
@@ -677,7 +669,6 @@ class PlainLayerTests(PanelCase):
         s = layer_rows(d.settings())[0]
         self.assertEqual((s["screen_top_field"], s["wl_field"], s["atd_field"], s["wl_table_id"], s["wl_atd_values"]),
                          ("", "", "", "", []))
-        self.assertEqual(self.chips()["Screens & water"], ("–", False))
 
 
 # ------------------------------------------------------------------ MODFLOW 6 surfaces
@@ -1234,7 +1225,14 @@ class MF6Tests(PanelCase):
                 self.assertGreaterEqual(b.width(), b.fontMetrics().horizontalAdvance(b.text()) + 8, b.text())
             top = lambda w: w.mapTo(d, w.rect().topLeft()).y()      # noqa: E731
             self.assertEqual(top(d.btn_add_surface), top(d.btn_add_bands))
-            self.assertGreater(top(d.btn_add_mf6), top(d.btn_add_surface))           # on a second row
+            # (0.3.6: one row, as the mockup; + MODFLOW 6… on a second row only where they do not all fit whole)
+            row = d.add_surfaces_row
+            if row.width() >= row.one_line_width():
+                self.assertEqual(top(d.btn_add_mf6), top(d.btn_add_surface))
+            else:
+                self.assertGreater(top(d.btn_add_mf6), top(d.btn_add_surface))
+            for b in (d.btn_add_surface, d.btn_add_bands, d.btn_add_mf6):
+                self.assertGreaterEqual(b.width(), b.minimumSizeHint().width(), b.text())   # never cut short
             # the variable buttons fit too ("Water table" becomes "WT")
             r = d.add_model_surfaces(model_surfaces(DISV_GRB, DISV_HDS, 3, heads=[1]))[0]
             r.set_editor_open(True)

@@ -742,6 +742,220 @@ the compact layout and the fill below are the defaults (decision 14).
       other golden is byte-identical; basic, wells, bytype and ground stay pixel-identical through the three load
       paths.
 
+## Decisions from the user (2026-10-09/10, version 0.3.6: hydrogeologic symbols, Other features, the panel redesign)
+
+27. **A hydrogeologic symbol catalogue; Other features: line and polygon layers; the panel redesigned** (new
+    `render/symbols.py`, `ui/symbol_icons.py`, `ui/problems.py`; `core/model.py`, `core/others.py`, `core/build.py`,
+    `core/hover.py`, `render/scales.py`, `render/figure.py`, `render/notes.py`; `ui/widgets.py`, `ui/point_rows.py`,
+    `ui/point_guess.py`, `ui/dock.py`, `ui/settings_store.py`; `scripts/run_tests_parallel.py`). His answers of
+    2026-10-09 on two approved mockups (the symbol drop-down; lines and polygons on the sheet), and the panel mockup
+    he approved on 2026-10-10 after three rounds (sixteen decisions, D1-D16, and one amendment to the catalogue),
+    answering his concern that the panel was getting too complicated (the user: "clean, well-organized ... tight and
+    elegant. Not too many words ... a verbose option to turn off extraneous words, like the warnings"). Settings
+    version 7 unchanged: only new row keys, with defaults. Supersedes the panel layout of decisions 17, 22 and 24 and
+    0.3.3's shape buttons (the "ui" section below follows it).
+    - **The catalogue** (`render/symbols.py`, pure: `math` and `typing` only, so core, render and ui all import it;
+      0.3.5's symbol geometry moved here from `scales.py` unchanged and is imported back): 30 choices in five groups,
+      in the drop-down's order, each a `Symbol(key, name, group, color, rests, mirrors, legacy)`: *Water at the
+      surface* (spring, thermal or mineral spring, stream or creek crossing, pond, wetland), *Wells shown as points
+      (no log)* (13: use not known, domestic, public supply, irrigation, industrial, monitoring or piezometer,
+      observation, pumping or extraction, flowing artesian, drywell or injection (UIC), unused, decommissioned,
+      infiltration gallery), *Measurements and samples* (stream or lake gauge, staff gauge, water-quality site, soil
+      or rock sample), *Geology and survey* (bedrock outcrop, landslide head scarp, survey benchmark) and *General
+      shapes* (Asterisk, Circle, Square, Diamond, Triangle). Drawn after FGDC-STD-013-2006, the USGS topographic map
+      symbols and common practice (the module docstring names the sections). Each has its usual colour, a new row's
+      colour (the row's colour stays his): `BLUE` #1f6fb2 (water, gauges, the general shapes), `BLACK` #111111 (wells,
+      the benchmark), `RED` #c62828 (pumping, the scarp, a sample), `GREEN` #2e7d32 (water quality), `GRAY` #555555
+      (outcrop). **The asterisk** (his amendment of 2026-10-10: "move the asterisk down with the other general
+      shapes") heads *General shapes*, named "Asterisk"; its key, colour and drawing are unchanged and it stays the
+      default of a new point row. Well symbols are for wells **without a log**: wells with depths stay explorations,
+      nothing converts.
+    - **Old and unknown keys**: the five generic shapes, the asterisk and the star (`LEGACY_DRAWN`) draw with 0.3.5's
+      own code, pixel-identical. The star is a legacy key (`LEGACY_KEYS`): kept on old rows and drawn, never offered
+      (the drop-down lists it, under "Kept from an older version", only while the row holds it). An unknown key is
+      cleaned on load to its kind's `model.DEFAULT_SHAPE` (point and polygon rows the asterisk, line rows the stream
+      crossing); at draw time (a hand-made object) `symbols.resolve()` gives `FALLBACK_KEY`, the circle: one explicit,
+      tested fallback (0.3.5 drew anything unknown silently as the asterisk).
+    - **Geometry** (`glyph(key, size_pt, k, flip)`: primitives `Stroke`, `Ring` (white inside), `Dot`, `Fill`,
+      `Letter` in paper inches about the symbol's origin, the point that marks a LIDAR or field elevation; strokes at
+      least `MIN_STROKE_PT` 0.6 pt with round caps and joins; waves of 12 segments; the pond's fill its colour at 20 %
+      on white, `tint`): the footprint is the exact ink as capsules (`glyph_capsules`, `glyph_bbox`), so resting on
+      the ground line, the label obstacles and the hover boxes stay exact. On the ground line every symbol rests on
+      its lowest ink but the **benchmark**, centred on it (`rests=False`: its centre marks the elevation). **The
+      spring's tail points downhill** (`scales.symbol_flip`, at sheet scale, so every sheet, tile and the preview
+      agree): it compares the ground a tail's reach ((0.3 + 1.0) × size) either side of the station and goes to the
+      lower side; on flat ground (within `SPRING_FLAT_IN` 0.005 in of paper), in the legend and in the icons it goes
+      right, toward A′. The thermal spring's "T" (never under 4 pt) sits opposite the tail. In the legend a new key is
+      centred on its ink box (gid `LEGEND_SYMBOL_GID`); every one fits the asterisk's 6 pt reservation, so the legend
+      rows and `standard_block_depth` are unchanged.
+    - **Icons** (`ui/symbol_icons.py`, theme-independent: only the given colour, white insides and edges):
+      `symbol_pixmap` / `symbol_icon(key, color=None, width=22, height=16, background=None)` paint the same
+      primitives (11 px nominal in a 16 px icon, `ICON_S_RATIO`, shrunk only to fit; a resting symbol 2 px above the
+      bottom, the benchmark centred; `symbol_icon` holds 1x and 2x pixmaps); `bracket_pixmap` / `bracket_icon(color,
+      style)` paint a polygon row's mark (solid ticks, the line solid or dashed 4/2 px).
+    - **Other features** (D7: the section renamed from Other points; `Settings.other_points` keeps its name and his
+      rows): a row's layer is a point, line or polygon layer (`others.feature_kind`, `others.feature_layer`;
+      `model.feature_row(kind, **kw)` makes a new row). Row keys after `elev_empty`: `kind` (`FEATURE_KINDS`, the
+      layer's geometry as last seen; the build trusts the layer's own), `bracket` ("inside" | "above",
+      `AREA_PLACES`), `bracket_style` ("solid" | "dash"), `edges` ("off" | "ground" | "full"). A new line row draws
+      the stream crossing in water blue, a polygon row is #7a4fb0 (`AREA_COLOR_DEFAULT`). A 0.3.5 row loads as itself
+      plus the four defaults (a point row, drawn as before); 0.3.5 opening a 0.3.6 project leaves line and polygon
+      rows out with its "no longer in the project" warning and reads a new symbol as the asterisk (not supported). A
+      layer of no geometry kind (a table) is left out: "Other points “X”: not a point, line or polygon layer; left
+      out." (the core's warnings keep the "Other points" prefix; the panel shows them as row problems).
+    - **Lines: a symbol where the section line crosses** (`others.find_crossings`; no Within distance): one
+      `OtherPoint` of kind "crossing" per crossing (a line that crosses twice gives two; a touch and the line's ends
+      count), its station exact, offset 0, side and direction "", with the point rows' symbol, colour, size, label,
+      type filter and elevation (`others._place`, shared with points). A stretch shared with the section line is one
+      crossing at its middle, flagged `ALONG_FLAG` ("runs along the section line for 300 ft"; shorter than
+      `ALONG_MIN_FT` 1 ft it is a plain crossing); one stream split into two features at the line is one crossing
+      (`_one_per_crossing`: the same label within `ALONG_TOL_FT`). Crossings join `model.other_points` and behave as
+      other points everywhere: resting, labels (the name only, never an offset), the elevation range, the legend (the
+      row's symbol), the notes (" Creeks where they cross the section line: on the ground line."), the hover and the
+      popup (small print "crossing", `hover._offset_cell`), the map rings. Not in the points CSV.
+    - **Polygons: a bracket per piece** (`others.find_area_pieces` -> `model.other_areas`, `AreaPiece(fid, label,
+      type_value, start, end, open_start, open_end, layer_index, ...)` sorted by start; a polygon that is not valid is
+      made valid, touching stretches merge, slivers under `MIN_PIECE_FT` 0.01 ft go): a horizontal line (`AREA_LW`
+      1 pt, solid or dashed 4/2 pt) with end ticks 0.06 in down over the piece's stations and its label (the label
+      field, else the row's legend name) centred above it in the row's colour, with a halo. A piece that runs past A
+      or A′ (that end strictly inside the polygon: more than 1e-3 ft from its edge, in any CRS) ends in an open arrow
+      and reads " (continues)" (`CONTINUES`). **In the frame** (the default): above the ground stroke and the
+      exploration ticks and labels and the other points in its span, 0.05 in clear (`AREA_CLEAR_IN`); **Above the
+      frame**: rows of `AREA_ROW_IN` (0.2218 in) over the frame top. Overlapping brackets stack, each place on its
+      own, the longer always above (`scales.area_layout`; footprints include the labels, so labels never collide).
+      **Edge lines** (off by default): dashed 0.6 pt (3/2 pt) at each closed end, down to the ground (for a row above
+      the frame: to the frame bottom at most) or the full frame height, under the data lines, broken where they pass
+      another bracket's label (`figure._edge_runs`). A tiled sheet cuts a bracket at its edge (no tick there) and
+      labels its own part. The legend gets a short bracket per polygon row, in its colour and line style (ticks
+      solid). Pieces have no hover, no map highlight and no notes sentence.
+    - **The plan** (`scales.area_layout`, pure, called by the plan and every painter, so they agree): Auto elevations
+      give the inside brackets room as they give the labels (`area_top` in `z_limits`); brackets above the frame grow
+      the top margin (`area_band_in` -> `Plan.above_in`, passed to every `margins()` call of the sheet, orientation
+      and tiling search) and lift the end letters, BEND labels and titles by it. **A manual range with no room**:
+      each cluster of overlapping brackets moves down whole under the frame top, stacking kept, and one plan warning
+      names them ("Brackets of {names} lowered: no room under the manual maximum of {z} ft. Raise it to {need} ft or
+      set Elevations to Auto."); where the minimum cuts off a bracket's ground it stands on the frame bottom, never
+      lost. **The preview lays the brackets out at its own scale** (`scales.AreaFrame` from `figure._Painter`: its
+      own tick, label and point boxes, labels at its k), so they keep clear of its relatively larger labels, and its
+      band above the frame grows when it needs more rows (never below the sheet's; at most 3 refits); sheets keep the
+      sheet-scale layout. A model without line or polygon rows plans and draws exactly as 0.3.5 (a new value is added
+      only when it is > 0): the goldens are untouched.
+    - **Six sections** (D1; `dock.sections`, object names unchanged): Line, Surfaces, Explorations, Other features,
+      Scale & sheet, Sheet style. Depths and Screens & water are subsections of Explorations (`grp_depth`,
+      `grp_screens`). Several may be open at once (no accordion); all are closed when the panel opens or a project is
+      loaded, as before. **Three levels you can tell apart** (D2): a closed section is a solid tile, an open one the
+      navy bar (`SectionHeader`, 30 px); a subsection heading is navy capitals after a 6 px square, with a hairline
+      rule, never filled ("a fill means click me": `SubsectionHeading`, 16 px); field names are plain sentence case,
+      small and muted (`field_label`). **An open section is one card** (D3, `SectionBody`): the bar over a body framed
+      in navy on a 4 px rail (`RAIL_W`), and a 10 px gap before the next tile. The contents, in the mockup's order
+      (every attribute name kept, section 4.2 of the build spec):
+      - Line: Layer | Feature; Pick, Draw, Selected; Ends A to A′, Reverse, Save to layer.
+      - Surfaces: the Ground card, the surface cards, + Surface, + Bands… and + MODFLOW 6… on one row, the Units &
+        datum pill.
+      - Explorations › Layers (the rows, + Add layer; "top drawn first" beside the heading with Verbose), All layers
+        (Within | Labels, Label text), Depths (Depth line, TD label, Tops from, the Checks pill: 0 means missing,
+        Ignore a table top off LIDAR by over [25] ft), Water & screens (Draw them, Print beside Off | Elev. | + date),
+        Plotted (the list, Show all in its heading).
+      - Other features › Layers (the rows, + Add layer).
+      - Scale & sheet › Scale (Horizontal | Vertical), Elevations (Auto | Manual and Split across sheets; Lowest |
+        Highest shown only under Manual, out of "More"), Sheet (Size | Format, Orientation, Title, the Distances &
+        printers pill).
+      - Sheet style › Grid (Look Green | Gray | Custom with its legend line and the custom table; Spacing from the
+        scale (1 in, 0.1 in) and, unticked, the horizontal and vertical major / minor spacing, moved here from Scale &
+        sheet; Fill sheet | Below lowest), Depth lines (Black & gray | Color, Reset in the heading), Page (Printer
+        edge; Compact layout, Notes, Bend lines, Shade below ground). The NEW tag and the dashed rule are gone.
+    - **Layer rows are cards; an open one joins its section ("Flare")** (D4, D5; `widgets.LayerCard`): a closed row
+      is a small card (1 px `field_line` border, `row_rail` on hover, radius 4 px); a click anywhere on it but its
+      check box, colour button, badge and ⋯ opens its editor. Open, the row and its editor are one light band
+      (`row_open`) reaching the section's rail: the rail beside it turns light blue (`row_rail`) and fades back to navy
+      over 8 px above and below; the band's top and bottom curve into the rail with concave swoops of radius 8 px
+      (`SWOOP`), its right corners round 6 px; a 1 px outline (`band_line`: #8fb6ca light, #3f6a80 dark; he asked for
+      it on 2026-10-10) runs along its top, right and bottom edges round both swoops (`paint_flare`, painted by the
+      `SectionBody` for each card it watches). Spacing as the mockup's: 12 px above an open band and between two open
+      bands (their swoops overlap), nothing extra under the last (`link_cards`: `set_first`, `set_last`,
+      `set_after_open`); nothing moves sideways when a row opens. Surfaces: the Ground card (`dock.GroundRow`: no
+      check box and no ⋯, a black bar, its "always drawn" tooltip on the name) and the surface cards (`SurfaceRow` is
+      a LayerCard; `ModelSurfaceRow` unchanged).
+    - **Exploration rows have tabs Layer | Depths | Water** (D4; `widgets.RowTabs`, 24 px; the mockup's grouping
+      exactly): Layer (Layer; Legend | Drawn in; the style box under Color; Label | Type; Types), Depths (Top
+      elevation | Bottom elevation; Total depth | In elevation range), Water (Measured level | Date; ATD level | Date;
+      Screen top | Screen bottom; Levels are | Screens are; Water levels from a table (CSV, Excel…) and its table
+      box). The Water tab is dimmed (still clickable; tooltip "No water-level or screen fields") when the layer has
+      none. "More: depths, water and range" is gone. Subtitles lose the layer name and the counts ("ExploName · 2 of
+      4 types · black", the label field in a darker ink; "layer not in the project · color"; "no layer chosen").
+    - **Other features rows** (D7; `OtherPointsRow`, one class for the three kinds, its kind from the layer, else the
+      stored `kind`): each with its kind's icon (the symbol, or the bracket mark) and subtitle ("points · Name ·
+      ground line", "lines · Name · 2 crossings", "areas · Name · bracket in the frame"). Points and lines: Layer,
+      Legend | Label, Type and Types (kept for every kind: the core filters any), Symbol | Color | Size, Elevation
+      Ground line | LIDAR | Field (a line row Ground line | Field, LIDAR shown only when stored) with Field | Where
+      empty. Polygons: Layer, Legend | Label, Type, Bracket In the frame | Above the frame, Edge lines Off | To ground |
+      Full height, Color | Line Solid | Dashed. **The symbol drop-down** (`point_rows.SymbolCombo`, replacing the six
+      shape buttons): the catalogue's groups as headers that are never picked or current (keyboard, wheel, a click on
+      one), each symbol with its icon, its name and the mockup's description as its tooltip (`SYMBOL_TIPS`); the
+      closed box shows the row's colour. **Choosing a symbol sets its usual color** (always; he can change it after).
+      Picking a layer of another kind switches an untouched default symbol and colour to the new kind's. + Add layer
+      takes a free point, line or polygon layer (`dock._default_feature_layer`: named like seeps or springs first).
+    - **Shorter names; each removed explanation in the tooltip of its control** (D12): Layer, Ends, Save to layer,
+      + Surface, + Bands…, + MODFLOW 6…, + Add layer, Legend, Label, Type, Types, Depth line, TD label, Tops from, 0
+      means missing, Draw them, Print beside, Lowest, Highest, Size, Look, Fill sheet, Below lowest, Black & gray.
+      Set-once settings fold under round pills (Units & datum, Checks, Distances & printers) that open a dashed box
+      (D6, `widgets.Disclosure`).
+    - **Verbose** (D13): a checkable last item of the ⋯ menu ("Verbose", tooltip "Hints and notes under the
+      controls"), off by default, stored per user in QgsSettings `xsections/verbose` (`widgets.verbose`,
+      `set_verbose`, `verbose_hub().changed`, through `settings_store.user_value`), never in the project. Off: no
+      explanatory sentence under any control. On: the hints come back under their controls (`widgets.Hint`: shown
+      exactly when its owner wants it and Verbose is on) and so do the readouts (`widgets.Readout`, now Verbose
+      notes: length, coverage, sources, Plotted counts, VE, the sheet ...). Two 0.3.5 hints go entirely (they pointed
+      from sections that are gone). Problem lines, badges, chips and the status line do not change with Verbose.
+    - **Problems, guesses and notes** (D14; `ui/problems.py`, pure, run by `dock._update_problems` after every build):
+      a **real problem** (something left off the sheet or changed on it) shows ONE short amber line in its row
+      whatever Verbose is ("3 water levels are not numbers; left out", "B-4: DTW “dry” is not a number: left out (+2
+      more)", "Layer not in the project", "4 left out: no Elev_ft", "Style not read; drawn in black"; on the Ground
+      card the DEM gaps, on a surface card its warning) with an amber badge counting it, and the section header gets
+      an amber count chip ("2 layers need a look"; hidden while its main chip is already amber). A **guess** (fields
+      guessed from their names) shows only the amber "check" badge. **Notes** (past the ends, below the frame, the
+      readouts' facts) are Verbose only. The core's warnings are matched to their rows by their text; what no row
+      owns (units assumed, the plan's warnings, errors) is the status line's.
+    - **The check card** (D15; `widgets.CheckBadge`, `CheckCard`, `CardHost`: one card per panel, a child overlay,
+      272 px): it opens ONLY on a click on the badge, never on hover; it closes on a second click, 100 ms
+      (`CARD_CLOSE_MS`) after the pointer has left badge and card, on a button, a scroll, a section opening or
+      closing, and when the panel hides. The mockup's look: an amber top edge, a round amber icon, the bold title, a
+      source line (layer · where it came from), a field → value list in monospace (up to `CARD_ITEMS` 8, then "… and N
+      more"), an optional note ("Only plain numbers are read; 1,234.5 is fine."), and its buttons: Open Layer, Open
+      Depths or Open Water open the row on that tab; Looks right (the primary one) confirms a guess.
+    - **`guessed` and Looks right** (D15): the exploration rows' new last key `guessed` (members of `model.GUESS_KEYS`,
+      the eleven field keys a guess fills, once each, in that order) lists the boxes guessed from their names that he
+      has not checked: a fresh guess's; on load the stored list, but for boxes now empty, plus boxes guessed again (a
+      saved field the layer lacks). His own choice in a box (or of Levels are, for the level boxes) drops it; **Looks
+      right clears them for good**, saved in the project with the row. The card "Fields were guessed" lists each box
+      and its field (Measured level → DTW · depths); the old sentence ("Guessed from the field names (check them):
+      …", `point_guess.guess_hint`) is a warn hint above the tabs, Verbose only. A 0.3.5 row loads with none (no
+      badge); opening a project still writes nothing until his first change; 0.3.5 drops the key. Other features rows
+      get no guess badge.
+    - **The status line** (under the panel's scroll area, above Refresh, ⋯ and Export…): a dot (green ready, amber
+      warning, red error) and the message (`problems.status_warnings`: the plan's warnings and every model warning no
+      row covers, amber; errors red, as before), or "Ready · 12 explorations, 3 points, 2 crossings, 1 area"
+      (`problems.ready_text`; "Ready · ground line only"). The DEM units warning's "Surfaces > More: units and datum"
+      reads "Surfaces › Units & datum" there (`OLD_PLACES`; the core's text is unchanged).
+    - **Light and dark** (D16; `widgets.theme_for`): the mockup's light and dark tokens. The dark ones are fixed
+      colours (bar #2f5a6f, tile #233038, band #1c3341 ...), no longer the palette's highlight (Night Mapping's
+      orange); ink, field and disabled colours still come from the palette, and the panel's own background stays the
+      palette's Window (#323232 in Night Mapping). Sizes are the mockup's px at Segoe UI 9 pt (12 px), fonts scaled
+      from the application font; the mockup's weight 500 is drawn DemiBold, as Edge shows Segoe UI (`MEDIUM`).
+    - **Narrow panels** (260 px with Segoe UI 9): nothing is cut. Two fields side by side (`pair` -> `widgets._Pair`)
+      stack while a column is narrower than what it holds; the Page check boxes go to one column (`checkbox_grid` ->
+      `_CheckGrid`); the Ends row and the three add-surface buttons put their last part on a second line
+      (`dock._FitRow`); "Split across sheets" reads "Split sheets" (`FitCheckBox`). At 340 px the mockup's layout
+      holds unchanged. Dashed boxes are painted (`paint_dashed_box`, 3 px dashes, 2 px gaps: Qt's stylesheet draws a
+      dashed border as dots), and a Hint's link to the Verbose hub is a Qt slot, dropped when the hint is deleted.
+    - **The test runner's deadline** (`scripts/run_tests_parallel.py`; "Tests" below): a worker that exits without
+      unittest's result while a process it started holds its output counts as crashed after `RESULT_GRACE`; any
+      worker, and the serial re-run, still running at max(900 s, 4 × its planned time) × its time factor is killed and
+      fails the run (`timed out workers=k`).
+    - **Compat**: the goldens (`test_compat_032`) are untouched and pass. Point rows draw pixel-identically to 0.3.5
+      (before / after renders of the six old shapes with explorations, sheets and previews, standard and compact, 100
+      and 300 dpi: identical). No settings version step; opening a project writes nothing.
+
 ## Real data the user works with (copies for tests, never touch originals)
 
 `<scratch>/realdata/CDF_wells.shp`: 8 wells, **EPSG:4326 PointZ** (must be transformed), fields
@@ -770,9 +984,9 @@ xsections/                      plugin folder (users: scripts/package.py zip; de
   metadata.txt  __init__.py  plugin.py  icon.svg
   core/   model.py  units.py  section.py  explorations.py  others.py  build.py  mf6.py  mf6_section.py
           hover.py  surfaces_csv.py  symbology.py
-  render/ scales.py  notes.py  figure.py  export.py  pdfprefs.py  _pdf_incremental.py
+  render/ scales.py  notes.py  figure.py  export.py  pdfprefs.py  _pdf_incremental.py  symbols.py (0.3.6)
   ui/     dock.py  widgets.py  point_guess.py  point_rows.py  mf6_dialog.py  maptools.py  preview.py  readout.py
-          popup.py  map_feedback.py  surfaces_csv_dialog.py  settings_store.py
+          popup.py  map_feedback.py  surfaces_csv_dialog.py  settings_store.py  symbol_icons.py  problems.py (0.3.6)
 tests/                          unittest; run with scripts/run_tests_parallel.bat (or run_tests.bat: one process)
   fixtures.py  test_*.py  data/mf6/  data/compat_032/ (the 0.3.2 golden files)
 ```
@@ -829,6 +1043,17 @@ def find_other_points(line, layer, row: dict, settings, crs, sampler, dist_facto
     # (points sorted by (station, label), beyond, near, labels left out for want of an elevation); placement
     # line | lidar | field with the elev_empty fallbacks; flags GAP_FLAG, NO_LIDAR_FLAG, the 25 ft field check;
     # direction as a Hit's (foot - point, decision 26)
+# (0.3.6, decision 27) Other features: line and polygon layers
+def feature_kind(layer) -> str                  # "point" | "line" | "polygon" from the geometry type; "" otherwise
+def feature_layer(layer_id, project=None)       # the valid point, line or polygon layer with this id, else None
+def find_crossings(line, layer, row, settings, crs, sampler, dist_factor, project, ground)
+        -> tuple[list[OtherPoint], list[str]]
+    # (crossings sorted by (station, label), labels left out for want of an elevation): an OtherPoint of kind
+    # "crossing" (offset 0, side and direction "") wherever the section line crosses or touches a line; a shared
+    # stretch: one crossing at its middle flagged ALONG_FLAG (from ALONG_MIN_FT = 1 ft); placed by _place as points
+def find_area_pieces(line, layer, row, crs, dist_factor, project) -> list[AreaPiece]
+    # the stretches of the line inside each polygon, sorted by (start, label); merged where they touch, slivers under
+    # MIN_PIECE_FT (0.01 ft) dropped; open_start / open_end when A / A′ lies strictly inside (ALONG_TOL_FT off its edge)
 
 # core/model.py (0.3.3, decision 22): rows, pure
 POINT_LAYER_DEFAULTS, OTHER_POINT_DEFAULTS, FLAT_LAYER_KEYS     # row keys in order; flat name -> row key
@@ -864,6 +1089,21 @@ def depth_widths(s) -> (black and gray pt, color pt)            # clamped to DEP
 ORIENTATIONS = ("auto", "landscape", "portrait")    # Settings.orientation, after `sheet` (default "auto")
 def clean_orientation(value) -> str                 # one of ORIENTATIONS (case and spaces ignored), else "auto"
 def clean_sheet_style(data: dict) -> None                       # in place, on every load (migrate_settings)
+# core/model.py (0.3.6, decision 27): Other features rows and guesses, pure (no settings version step)
+OTHER_SHAPES = render.symbols.SHAPE_KEYS          # the catalogue's 30 keys and the legacy star
+FEATURE_KINDS = ("point", "line", "polygon"); AREA_PLACES = ("inside", "above"); AREA_EDGES = ("off", "ground", "full")
+AREA_STYLES = ("solid", "dash"); AREA_COLOR_DEFAULT = "#7a4fb0"
+DEFAULT_SHAPE = {"point": "asterisk", "line": "stream", "polygon": "asterisk"}   # an unknown shape is cleaned to it
+# OTHER_POINT_DEFAULTS gains kind, bracket, bracket_style, edges (after elev_empty); clean_other_point cleans kind first
+def feature_row(kind="point", **kw) -> dict      # a new, cleaned Other features row of that kind
+GUESS_KEYS = ("label_field", "type_field", "top_field", "bottom_elev_field", "depth_field", "screen_top_field",
+              "screen_bottom_field", "wl_field", "wl_date_field", "atd_field", "atd_date_field")
+# POINT_LAYER_DEFAULTS gains guessed=[] (last): the boxes guessed from their names, not checked yet (the row's
+# "check" badge; Looks right clears it); clean_point_layer keeps GUESS_KEYS members, once each, in that order;
+# layer_view, the build and FLAT_LAYER_KEYS ignore it
+# OtherPoint.kind "point" | "crossing"; OtherLayerInfo.kind / bracket / bracket_style / edges (plotted counts points,
+# crossings or pieces); AreaPiece(fid, label, type_value, start, end, open_start, open_end, layer_index, layer_id,
+# layer_name); SectionModel.other_areas (sorted by (start, layer_index, label)); Plan.above_in (in, the band above)
 
 # core/symbology.py (0.3.4, decision 23): QGIS core only, no widgets, no matplotlib
 NEAR_WHITE = 230; NO_VALUE_LABEL = "(no value)"; OTHER_VALUES_LABEL = "(other values)"
@@ -881,7 +1121,9 @@ def build_section(settings: Settings, project: QgsProject) -> SectionModel
     # no exploration row: a ground-only model (decision 9); every ticked row through layer_view, one sampler
     # and one ground profile; a ticked row whose layer is gone: SectionError naming the row; an other-points
     # row whose layer is gone: left out with a warning (decision 22); a Color row: read_styles once for all its
-    # hits (plotted and left off), a style that can't be read: that row black with a warning (decision 23)
+    # hits (plotted and left off), a style that can't be read: that row black with a warning (decision 23);
+    # (0.3.6) an other row by its layer's kind: points, a line row's crossings (they join other_points), a polygon
+    # row's pieces (other_areas); a layer of no kind left out with a warning (decision 27)
 
 # core/hover.py (0.3.1; 0.3.3 additions)
 def hover_targets(model) -> list                 # model.hits, then model.other_points (one hover index)
@@ -893,6 +1135,7 @@ def also_cells(targets, settings, model)         # the popup's "Also here" rows 
 def strip_cells(t, settings, model=None)         # (0.3.4) the strip's (title, value, small print, level kind):
     # target_cells, but a water level titled by its date ("Measured" / "ATD" without one), "11.3 below top", kind
     # "measured" / "atd" (its symbol); the popup keeps target_cells
+# (0.3.6) crossings are other points (hover targets); their offset cell's small print is "crossing"; pieces are none
 ```
 
 ## render API
@@ -935,6 +1178,29 @@ def ground_top_fn(stations, zs, x_in, z_in, r) -> top(left, right)   # the groun
 def other_label_layout(xs, anchors, widths, k, frame_w, obstacles, ground_top=None) -> list[LabelSpot]
 def other_label_top(model, settings, plot_length) -> float # the plan's room for the other-point labels, ft
 class PlacedPoint(index, station, z, half_w, below, above, label_top)   # an other point as drawn (for the hover)
+# 0.3.6 (decision 27): the symbol geometry lives in render/symbols.py (imported back here); brackets
+def symbol_flip(model, p, settings) -> bool                # the spring's tail to the lower side (SPRING_FLAT_IN 0.005)
+def other_label_boxes(model, settings, plot_length) -> (symbol boxes, label boxes)   # other points at sheet scale
+class AreaSpot(index, place, level, text, label_x, line_z, top_z, lowered)   # a piece's bracket as laid out
+class AreaFrame(scale, k, z_in, z_of, obstacles)           # a drawing of its own scale (the preview) for area_layout
+def area_layout(model, settings, plot_length, z_cap=None, point_boxes=None, z_floor=None, frame=None)
+    -> list[AreaSpot]                                      # stacking (shortest first, the longer above), inside / above
+def area_top(model, settings, plot_length, point_boxes=None, z_floor=None) -> float   # the Auto range's room, ft
+def area_band_in(model, settings, plot_length, scale=1.0, k=1.0) -> float   # Plan.above_in: AREA_FRAME_GAP_IN + rows
+def area_warnings(model, settings, plot_length, z_max, v_major, z_min=None) -> list[str]   # "Brackets of … lowered"
+# AREA_LW 1.0 pt, AREA_TICK_IN 0.06, AREA_ARROW_IN / _HALF_IN 0.06 / 0.035, AREA_LABEL_GAP_IN 0.02, AREA_PAD_IN 0.04,
+# AREA_CLEAR_IN 0.05, AREA_STACK_GAP_IN 0.03, AREA_TOP_PAD_IN 0.02, AREA_FRAME_GAP_IN 0.03, AREA_ROW_IN 0.2218 in,
+# AREA_DASH_PT (4, 2), AREA_EDGE_LW 0.6 pt with AREA_EDGE_DASH_PT (3, 2), CONTINUES " (continues)"; margins(...,
+# above_in=0.0) grows the top by the band; display_label: a crossing is its name only
+
+# render/symbols.py (0.3.6, decision 27): pure (math, typing)
+class Symbol(key, name, group, color, rests=True, mirrors=False, legacy=False)
+GROUPS; CATALOGUE (30, drop-down order); SYMBOLS (by key, the star too); CHOICE_KEYS; LEGACY_KEYS = ("star",)
+SHAPE_KEYS; LEGACY_DRAWN (0.3.5's six, drawn by 0.3.5's code); FALLBACK_KEY = "circle"
+def resolve(key) -> str; symbol(key) -> Symbol; usual_color(key) -> str; grouped() -> [(group, [Symbol])]
+def glyph(key, size_pt, k=1.0, flip=False) -> [Stroke | Ring | Dot | Fill | Letter]   # paper inches, y up
+def glyph_capsules(...) -> [Capsule]; glyph_bbox(...) -> (left, right, bottom, top); tint(color, f=0.2)
+def symbol_capsules(shape, size_pt, k=1.0, flip=False)    # 0.3.5's for LEGACY_DRAWN, else glyph_capsules
 ```
 
 `margins()`: the standard layout with notes keeps `MARGIN`, moved by the printer edge (0.5 in: `MARGIN`;
@@ -1003,6 +1269,12 @@ def depth_sources_text(settings, td=False, views=None) -> str                 # 
 # "lines.scale_dashes": True
 def draw_swatch(fig, model, settings, entry, x, y) -> None  # one legend swatch: layer / style a line in the
     # entry's colour at the Color width, else Gray or black at the black width; points, surfaces, levels as before
+# 0.3.6 (decision 27): _symbol_artists(shape, ..., flip=False) draws a catalogue key primitive by primitive (the
+# LEGACY_DRAWN six as 0.3.5); _Painter.areas() the brackets (after other_points(), before ends()), their edge lines
+# (_edge_runs) and labels; draw_swatch kind "area" (a small bracket in the row's colour and line style, ticks solid);
+# draw_preview lays the brackets out at its own scale (_Painter._area_frame -> scales.AreaFrame) and grows its band
+# above the frame when needed. AREA_Z 5.5, AREA_EDGE_Z 2.6; gids AREA_GID "xsections-area", AREA_EDGE_GID,
+# AREA_LABEL_GID, AREA_LABEL_HALO_GID, LEGEND_AREA_GID "xsections-legend-area", LEGEND_SYMBOL_GID
 # render/export.py
 def export(model, settings, plan, path: str, fmt: str = "pdf", dpi: int = 300) -> list[str]
     # pdf: one file, one page per sheet (PdfPages), then pdfprefs.add_print_prefs
@@ -1051,6 +1323,14 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   ground line with 0.1 pt to spare, or centred on its LIDAR or field elevation with a dotted lead (0.6 pt)
   from the ground line when more than 0.05 in below it; the name 7 pt, horizontal, with a halo, above it
   (0.02 in) and at least 0.05 in above the ground line, raised clear of the others with a 0.4 pt leader.
+  Since 0.3.6 (decision 27) the symbol is any key of `render/symbols.py` (the old six drawn as before), and a line
+  row's crossings are drawn the same way.
+- Brackets (decision 27): a polygon row's piece as a 1 pt line in the row's colour (solid, or dashed 4/2 pt) with
+  0.06 in end ticks, or an open arrow at an end past A / A′ with " (continues)" after the label; the label 7 pt in
+  the row's colour with a halo, 0.02 in above the line, z 6; the line, ticks and arrows z 5.5; in the frame (above
+  the ground and the labels in its span, 0.05 in clear, stacked 0.03 in apart) or in rows of 0.2218 in over the
+  frame (the top margin grows by them, the end letters, BEND labels and titles move up). Edge lines: 0.6 pt, dashed
+  3/2 pt, z 2.6, to the ground or the frame bottom.
 - Tick: 0.9 pt, from `tick_base + 0.04 in` to `+0.18 in` (paper units via `ScaledTranslation`).
 - Label: 7 pt, vertical by default (reads bottom to top), above the tick; labels closer than
   1.18 x font height are spread sideways with thin leader lines (minimal 1-D displacement).
@@ -1118,21 +1398,27 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   The readout strip is compact since 0.3.4 (decision 23): one row of equal tiles (about 45 px) down to a 700 px
   preview, the first tile "760 ft from A" over the cursor's elevation and depth, "Ground", then each surface;
   numbers never cut, labels, details and names with "…".
-- Panel sections (0.2.0, decision 17; 0.3.3, decision 22; `ui/widgets.py`: collapsible `Section` with a summary
-  chip, `Segmented` with the QComboBox API the code uses, "More" disclosures), top to bottom: Line, Surfaces (the
-  ground row with the DEM, then one row per other surface with an inline editor, + Add surface, + Add all
-  bands…), Explorations (Point layers "drawn in this order": the exploration rows, + Add point layer, Plotted
-  explorations, Within (all layers) and Labels, Label text), Depths (the line from top to bottom, Label the
-  total depth, More: where tops come from (all layers); the fields are in the rows), Screens & water (screens
-  on or off, Print beside the symbol Off | Elevation | Elev. + date; the fields are in the rows), Other points
-  (its rows, + Add point layer), Scale & sheet (Horizontal | Vertical, Sheet | Format, Orientation Auto | Landscape
-  | Portrait since 0.3.5, off for a custom page: decision 25, Elevations | Split across sheets, Title, More: grid,
-  labels, printers), Sheet style (Grid Green | Gray | Custom, Depth lines, Printer
-  edge 0.5 | 0.3 in, Fill with grid Off | Below | Both; Compact layout, Notes, Bend lines, Shade below ground;
-  0.3.4: Data lines Black | By type is gone, decision 23). All
-  closed when the dock is created, reopened, or a project is loaded or cleared; never saved. The open
-  header is navy (`#193340`; the palette highlight in a dark theme). Action bar: Refresh, ⋯ (Export points CSV…,
-  Save line to layer), Export… The widgets start from `Settings()`.
+- Panel sections (0.3.6, decision 27, the approved panel mockup; before: decisions 17 and 22). `ui/widgets.py`
+  holds the visual system: `CollapsibleSection` (a `SectionHeader` tile or bar with its summary chip and amber
+  count chip, a `SectionBody` on its navy rail that paints the open cards' Flare bands), `Subsection` /
+  `SubsectionHeading`, `field_label`, `pair` and `checkbox_grid` (they stack in a narrow panel), the pills
+  (`Disclosure`), `LayerCard` (+ `link_cards`, `paint_flare`), `RowTabs`, `Hint` / `Readout` and Verbose, the check
+  badge, card and host, the swatches, `SegmentedControl` with the QComboBox API the code uses, `theme_for` (the
+  mockup's light and dark tokens) and `panel_stylesheet`. Top to bottom: Line (Layer | Feature; Pick, Draw,
+  Selected; Ends A to A′, Reverse, Save to layer), Surfaces (the Ground card with the DEM and band, a card per
+  other surface, + Surface, + Bands…, + MODFLOW 6…; the Units & datum pill), Explorations (Layers: the exploration
+  rows, + Add layer; All layers: Within | Labels, Label text; Depths: Depth line, TD label, Tops from, the Checks
+  pill; Water & screens: Draw them, Print beside Off | Elev. | + date; Plotted), Other features (its rows of point,
+  line and polygon layers, + Add layer), Scale & sheet (Scale: Horizontal | Vertical; Elevations: Auto | Manual,
+  Split across sheets, Lowest | Highest under Manual; Sheet: Size | Format, Orientation Auto | Landscape | Portrait
+  (off for a custom page: decision 25), Title, the Distances & printers pill), Sheet style (Grid: Look Green | Gray
+  | Custom, Spacing from the scale and the spacing when unticked, Fill sheet | Below lowest; Depth lines: Black &
+  gray | Color, Reset; Page: Printer edge, Compact layout, Notes, Bend lines, Shade below ground). Several may be
+  open at once; all closed when the dock is created, reopened, or a project is loaded or cleared; never saved. A
+  closed section is a solid tile, an open one the navy bar (#193340 light, #2f5a6f dark, fixed: no longer the
+  palette's highlight). Under the scroll area the status line (a dot, the message or "Ready · …"), then the action
+  bar: Refresh, ⋯ (Export points CSV…, Save line to layer, then Verbose, checkable), Export… The widgets start from
+  `Settings()`.
   Widgets: `QgsMapLayerComboBox` (filtered by geometry/raster), `QgsFieldComboBox` (allow empty where
   optional), `QgsRasterBandComboBox`,
   `QgsDoubleSpinBox`. Type values: a checkable list (`point_rows.TypeList`) counted in one scan of the layer.
@@ -1153,21 +1439,29 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   box that is still empty, and a row list that is still empty, gets the same guess from the new layers; a
   row whose layer is missing takes back an added layer of the same name. Guesses never mark the settings as
   the user's (they are not saved by themselves).
-- **Point-layer rows** (`ui/point_rows.py`, decision 22): `ExplorationRow` and `OtherPointsRow` in a
-  `PointRowList`, each a header (tick, swatch: the look or the symbol, the legend name and a subtitle such as
-  "layer · label field · 3 of 12 types · 38 plotted", ⋯ Move up / Move down / Remove) and an editor opened by
-  clicking the name, in the mockup's order. A row never loses what it was given: while its layer or table is
-  missing (amber), or while layers are being removed, `value()` writes back what it stored, with only the
-  header applied. Filling in code is silent (`changed` only for the user's edits); a type list scans its
-  layer when the row's layer or type field changes and on Refresh, never on a rebuild. `PlottedList`:
-  "Plotted explorations (N of M, K left off by you)", one group per row, sorted by station, each entry
-  "300 ft · 40 ft L", unticked ones struck through, Show all; the dock keeps the entries (`_hidden`).
+- **Point-layer rows** (`ui/point_rows.py`, decision 22; cards since 0.3.6, decision 27): `ExplorationRow` and
+  `OtherPointsRow` (Other features: point, line and polygon layers) in a `PointRowList` (no frame, 4 px apart, its
+  section's body painting the open card's band: `set_band_host`), each a `LayerCard`: a header (tick, swatch: the
+  look, the symbol or the bracket mark; the legend name and a subtitle such as "ExploName · 3 of 12 types · black",
+  "lines · Name · 2 crossings"; the check badge; ⋯ Move up / Move down / Remove; under it the amber problem line)
+  and an editor opened by a click on the card. An exploration row's editor has the tabs Layer | Depths | Water
+  (`show_tab`), an Other features row's the controls of its kind (the symbol drop-down `SymbolCombo`). A row never
+  loses what it was given: while its layer or table is missing (amber), or while layers are being removed,
+  `value()` writes back what it stored, with only the header applied. Filling in code is silent (`changed` only for
+  the user's edits); a type list scans its layer when the row's layer or type field changes and on Refresh, never
+  on a rebuild. `set_problems` (from the dock, `ui/problems.py`), `confirm_guess` (Looks right), `checksChanged`.
+  `PlottedList` (the Plotted subsection): "PLOTTED" with Show all in its heading, "N of M" beside it with Verbose,
+  the old title "Plotted explorations (N of M, K left off by you)" as its tooltip (`text()`); one group per row,
+  sorted by station, each entry "300 ft · 40 ft L", unticked ones struck through; the dock keeps the entries
+  (`_hidden`).
 - **Drawn in and the style box** (0.3.4, decision 23; `ExplorationRow`): `look_seg` Black | Gray | Color (tooltips
   "Black, like your own explorations", "Gray, to set this layer apart", "Each exploration in its color in this
   layer's style in QGIS"), in `field_box("Drawn in", ...)`; no colour button (Other points rows keep theirs).
   Black and Gray show `look_hint`: "Black by default, like your own explorations. Gray sets this layer apart;
-  Color takes each exploration's color from this layer's style in QGIS." Color shows `style_box` (a
-  `LayerStyleBox`, frame `xsStyleBox`) instead:
+  Color takes each exploration's color from this layer's style in QGIS." (0.3.6: that sentence is the tooltip of
+  Drawn in; the Verbose hint reads "Black like your own explorations; Gray sets a layer apart; Color takes each
+  exploration’s color from the layer’s style in QGIS.") Color shows `style_box` (a `LayerStyleBox`, frame
+  `xsStyleBox`) instead:
   - `head`: "From the layer's style in QGIS: **Single symbol**" | "**Categorized by {field}** · {n} categories" |
     "**Graduated by {field}** · {n} ranges" | "**Rule-based** · {n} rules" | "**{renderer name}**" (another
     kind) | "no symbols (the lines are drawn in black)" | "the layer is not in the project." | "no layer
@@ -1180,7 +1474,7 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
     a muted "+ N more" for the other items that are on;
   - `off_note` (hidden at 0): "{k} switched off in QGIS: their explorations are drawn in black.";
   - `foot`: "Change them in Layer Properties > Symbology; the sheet follows." (not for a single symbol, no
-    symbols or a missing layer).
+    symbols or a missing layer; since 0.3.6 a Verbose hint, and the box's tooltip).
   The row reads its layer's style (`symbology.layer_style`) when a layer is applied, on a look change, on
   Refresh and when the layer's style changes (`refresh_style`). The header swatch (`ExploSwatch.set_colors`):
   Black and Gray their colour; Color the first three chip colours as vertical bars (one colour: the line and cap
@@ -1192,22 +1486,26 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   points row, a table of water levels) is picked in an exploration row. `_on_point_style_changed(layer_id)` calls
   `refresh_style()` on that layer's rows and schedules a rebuild only when one is visible and in Color; it
   never marks the settings as the user's (nothing is saved).
-- **Sheet style** (0.3.4, decision 23; `dock._build_style_group`, in the mockup's order):
-  1. *Grid* Green | Gray | Custom (tooltips "Green engineering pad (the default)", "Gray, for black-and-white
-     printers", "Your own colors, widths and line styles");
+- **Sheet style** (0.3.4, decision 23; `dock._build_style_group`, in the mockup's order; regrouped in 0.3.6,
+  decision 27, into the subsections Grid, Depth lines and Page):
+  1. *Grid* › Look Green | Gray | Custom (tooltips "Green engineering pad (the default)", "Gray, for
+     black-and-white printers", "Your own colors, widths and line styles");
   2. under Green or Gray, `grid_info`, one muted line: a short line in the major colour, "Major 0.7 pt", one in
-     the minor colour, "Minor 0.35 pt", then "solid · the default" (Gray: "solid");
+     the minor colour, "Minor 0.35 pt", then "solid" (0.3.5: "solid · the default");
   3. under Custom, `grid_custom_box`: a small table, columns Color / Width / Line, rows Major and Minor, with a
      colour button each (no opacity, no menu), a width spin (0.1-3 pt, 2 decimals, 0.05 steps) and an icon-only
      Solid | Dashed | Dotted control (`widgets.LINE_STYLE_ICONS`, 22 × 8 icons, accessible names Solid, Dashed,
-     Dotted); under it "Major lines every inch, minor every tenth." ("Major and minor lines at the spacing set
-     under Scale & sheet." with the automatic grid off) and "Start from Green · Gray";
-  4. the *Depth lines* sub-heading with a NEW badge (`NEW_BADGE_VERSION = "0.3.4"`: the next feature release
-     removes it in one place) and a Reset link ("Back to 0.75 pt and 1.6 pt"), then *Black and gray* (0.25-3 pt)
-     and *Color* (0.25-4 pt) spins and the hint "Which layers are black, gray or in color is set for each layer,
-     under Explorations > Drawn in."; the spins and Reset are enabled only with the depth line on;
-  5. below a dashed rule, Printer edge and Fill with grid, the four check boxes and "The defaults leave the most
-     room to draw and the paper clear for colored pencil." (unchanged).
+     Dotted); under it the Verbose hint "Major lines every inch, minor every tenth." ("Major and minor lines at
+     the spacing below." with the automatic grid off) and "Start from Green · Gray" at the right;
+  4. (0.3.6) *Spacing from the scale (1 in, 0.1 in)* (`grid_auto`) and, only while it is unticked,
+     `grid_spacing_row` (Horizontal, ft and Vertical, ft: major / minor), then Fill sheet Off | Below | Both |
+     Below lowest, all moved here from Scale & sheet and the old Sheet style rows;
+  5. *Depth lines* (the subsection heading, Reset at its right: "Back to 0.75 pt and 1.6 pt"; the NEW badge is
+     gone), then *Black & gray* (0.25-3 pt) and *Color* (0.25-4 pt) spins and the Verbose hint "Which layers are
+     black, gray or in color is set for each layer, under Explorations › Drawn in."; the spins and Reset are
+     enabled only with the depth line on;
+  6. *Page*: Printer edge, the four check boxes and the Verbose hint "The defaults leave the most room to draw
+     and the paper clear for colored pencil." (0.3.5's dashed rule is gone).
   The first Custom starts from the preset in use (`_grid_last_preset`, tracked because `currentIndexChanged`
   fires after the old index is gone) unless the project has used Custom before (`grid_custom_used`); Green and
   Gray never change the custom widgets. "Start from Green / Gray" and Reset set their widgets quietly, then mark
@@ -1217,18 +1515,19 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   widths are not 0.75 / 1.6. A fresh or cleared project starts from `Settings()`: Green, 0.75 / 1.6,
   `grid_custom_used` False; nothing is written to QgsSettings.
 - Section line: line layer combo + feature combo, **Pick on map**, **Draw on map**, **Use selected**,
-  **Reverse**, end labels. Draw tool = port of `QgsMapToolProfileCurve` (`QgsMapToolCapture`,
+  **Reverse**, end labels (0.3.6: Layer | Feature, Pick, Draw, Selected, then one Ends row: A to A′, Reverse,
+  Save to layer at the right). Draw tool = port of `QgsMapToolProfileCurve` (`QgsMapToolCapture`,
   CaptureLine, `layer()` returns None, emits the captured curve; snapping and CAD dock work).
   Pick tool = `QgsMapToolIdentifyFeature` / `QgsIdentifyMenu.findFeaturesOnCanvas` on line layers.
 - Map feedback (`QgsRubberBand`): section line, flat-cap swath (`buffer(tol, 8, Flat, Round, 2)`),
-  plotted explorations and other points highlighted (not the ones left off). Cleared on unload.
-- Top-to-bottom line group: [x] Draw a line from top to bottom; Top from (Table, else LIDAR at the
-  exploration / LIDAR at the exploration / Table only); Top elevation field; Bottom elevation field;
-  Total depth field (all optional; in each row since 0.3.3); Treat 0 as missing; Ignore a table top more than
-  [25] ft from LIDAR;
-  [x] Label total depth (TD 50'); the one-line rule "Each exploration: top from the table, else LIDAR;
-  bottom from the table, else top − depth."; and a sources readout
-  ("Tops: 5 ExploElev, 3 LIDAR · Bottoms: 2 BotElev, 6 top − ExploDepth, 1 none").
+  plotted explorations and other points highlighted (not the ones left off); since 0.3.6 a line row's crossings
+  too, as other points; polygon pieces are not highlighted. Cleared on unload.
+- Top-to-bottom line group (0.3.6: Explorations › Depths): [x] Depth line; [x] TD label (TD 50'); Tops from (Table,
+  else LIDAR at the exploration / LIDAR at the exploration / Table only); the Checks pill: 0 means missing, Ignore
+  a table top off LIDAR by over [25] ft. The Top elevation, Bottom elevation and Total depth fields (all optional)
+  are in each row's Depths tab, with the Verbose hint "Top from the table, else LIDAR; bottom from the table, else
+  top − depth."; and a sources readout ("Tops: 5 ExploElev, 3 LIDAR · Bottoms: 2 BotElev, 6 top − ExploDepth, 1
+  none").
 - Readouts under each group: length / vertices / bends / direction with azimuth (hint to Reverse if
   A′ bears 135–315°), DEM coverage and gaps, plotted count / near count / beyond ends / flags (or
   "No explorations layer: ground line only"), top and bottom sources,
@@ -1238,9 +1537,14 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   when several rows are on, "No exploration layer is on: ground line and surfaces only."; Other points per
   row ("Seeps: 4 plotted · …", then one line per point when there are 6 or fewer). Chips: "N plotted",
   "2 of 3 on · N plotted", "Layer missing" / "2 layers missing" (amber), "Off", "None".
+  Since 0.3.6 (decision 27) the readouts are Verbose notes (`widgets.Readout`): a real problem (flags, values that
+  are not numbers, a layer gone, DEM gaps, a surface left out) is its row's amber line and check card instead
+  (`ui/problems.py`), and the Other features count adds areas ("… and N more flags" after six). The Depths and
+  Screens & water chips went with their sections; each section's amber count chip counts its cards with a badge.
 - Any change (including a new project or layer CRS) -> debounced (300 ms) rebuild + preview. Errors
-  (`SectionError`) show in a message line, never a traceback dialog; `Plan.warnings` and model warnings
-  not already in a readout show there in amber. In Auto, the disabled min / max show the auto limits.
+  (`SectionError`) show in the status line (0.3.6; the message line before), never a traceback dialog;
+  `Plan.warnings` and model warnings no row covers show there in amber (`problems.status_warnings`), else "Ready ·
+  …". Lowest | Highest are shown only under Manual (0.3.6; before, disabled in Auto, they showed the auto limits).
 - File errors (a PDF or CSV held open by another program) become a message-bar warning. Unreadable
   saved settings fall back to defaults value by value; a failed restore never half-loads the plugin.
 - The preview toolbar (decisions 20, 21): Fit, Zoom out, the zoom percent, Zoom in, Surfaces CSV…, and the
@@ -1251,9 +1555,10 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   **Export points CSV** (one row per plotted Hit, left-off ones out, with top_source, bottom_source (field,
   shifted, depth or none), depth_ft = top − bottom, total_depth_ft, screen_top_ft, screen_bottom_ft and
   water_levels, e.g. "652.8 measured 6/12/2025; 640.1 ATD", and `layer` last: the row's legend name; other
-  points are not written).
+  points, crossings and pieces are not written).
 - Settings persist in the project: `QgsProject.writeEntry("xsections", "settings", settings.to_json())`,
-  restored on project load (older versions migrated, see decisions 2, 14, 22 and 23).
+  restored on project load (older versions migrated, see decisions 2, 14, 22 and 23). Per-user conveniences (the
+  last export folder, Verbose since 0.3.6) go to QgsSettings under `xsections/` (`settings_store.user_value`).
 - Qt6 rules: fully qualified enums (`Qt.AlignmentFlag.AlignLeft`), `exec()` not `exec_()`, import Qt via
   `qgis.PyQt`, no PyQt5 imports, no compiled resources (icon by file path). `unload()` removes every
   action, dock, map tool, rubber band and signal connection.
@@ -1283,6 +1588,33 @@ with its traceback, and ends like unittest's (`Ran N tests in X s`, `OK` / `FAIL
 5 when nothing ran; exit 0 only when all passed). A worker passes only when its exit status is the one `python -m
 unittest` gives for the result it printed (0 for OK, 1 for FAILED, 5 when no test ran and none was skipped): one
 that prints OK and then dies, say in QGIS's shutdown, fails the run as a crashed worker, as `run_tests.bat` would.
+A worker is never waited for without end once it has printed its result (hang fix of 2026-10-09: one python3.exe,
+after unittest's `sys.exit(0)`, stayed stuck in Windows' tear-down of the process, its handle never signalled and
+its pipe never closed, taskkill powerless, and the launcher waited for ever): when its output holds unittest's final
+result (`Ran N tests`, then the verdict) and nothing new comes for `RESULT_GRACE` (30 s times its time factor) while
+the pipe is still open, its exit status is read without waiting (ctypes `GetExitCodeProcess` on the process handle,
+`poll()` elsewhere) and, when it has one, used under the rules above (the summary notes "worker N's process did not
+end after its result (Windows); exit code X used"); still `STILL_ACTIVE` after `EXIT_GRACE` (60 s) more, it is
+killed as far as it can be and counts as hung after its result: the run fails (`hung workers=k`, the worker, its log
+and its PID named). Nor is one waited for without end before its result (deadline of 2026-10-10): a worker that
+has exited without unittest's result while a process it started holds its pipe is taken as ended with that exit code
+once nothing has come for `RESULT_GRACE` (`check_open`, `Worker.cut_without_result`; not the listing process): a
+crash without a result ("ended without a result (exit code N) (its output was still open: held by a process it
+started?)"). And every worker, the serial re-run too (planned by `make_units`, so it has estimates), has a deadline:
+`max(WORKER_DEADLINE_MIN, WORKER_DEADLINE_K x planned)` (900 s, 4 x the estimates of its names) times its time
+factor, 2,700 s for a parallel worker planned at ~130 s and ~3,000 s for `--serial`, while the longest worker takes
+~140 s and the longest test ~123 s. One still running then (`check_deadline`) is killed (or noted as already exited,
+another process holding its output) and fails the run as timed out (`timed out workers=k`; the worker, its PID, its
+log and the last test it started named; `--plan` shows each worker's deadline).
+The listing process (it starts and ends QGIS too: the test modules call `start_app` at import) is
+read the same way, never with `communicate()` or `wait()` without a timeout (before, `subprocess.run(timeout=...)` did
+not bound it on Windows: after the timeout's kill it waited for the pipe's end): once its line of JSON has come whole
+and nothing more for `LIST_GRACE` (10 s) while its pipe is open, its exit status is read without waiting (it is
+killed when it has none `EXIT_GRACE` later) and its list is used, with a note (it is no worker: the run does not fail
+for it); `LIST_TIMEOUT` (300 s) after its start it is given up (killed if it has not exited), and the run goes on
+without a list. Each process carries a tag of its own under the run's (`<run>_w<n>_`, `_list_`, `_rerun_`), so
+the end-of-run clean-up (and `--plan`'s) leaves the `RUN_TMP` folders of a process that has not ended in place and
+lists them.
 Timing tests (`fixtures.timing_test`: the budgets, the waits for the panel's 300 ms timer, the hover speed) multiply
 their limits and waits by `fixtures.TIME_FACTOR` (`budget()`, `wait_ms()`), from `XSECTIONS_TIME_FACTOR`: 3 under the
 parallel launcher, 1 otherwise, so a serial run checks them exactly as written. When several processes ran, every
@@ -1302,7 +1634,15 @@ its ~1 MB `xsec_run_*` folders in `%TEMP%` (three a full run: its own and the tw
 `XSECTIONS_MAKE_GOLDEN` or `XSECTIONS_REMAKE_GOLDEN` set the launcher refuses (exit 2). `test_parallel_runner.py`
 covers the launcher (its reading of a -v stream made by unittest itself, a worker's exit status, the re-run verdict
 and that one process is never run again, the tags, the listing and the splitting along it, the not-run check,
-Ctrl+C, the refusal, a worker's environment; `main()` runs there with its processes replaced) and `TIME_FACTOR`.
+Ctrl+C, the refusal, a worker's environment; `main()` runs there with its processes replaced; a worker that prints
+its result and then keeps its pipe open, with small child scripts and graces of a second: one that sleeps holding
+stdout is killed and counted as hung, one that exits with a code while a child of it holds the pipe has that code
+used, and `GetExitCodeProcess` is read on real processes; one that exits without a result while a child holds its
+pipe counts as crashed within its grace, one stuck in its test past a deadline of 2 s is killed and timed out (or
+noted as already exited), and with `main()`'s processes replaced a timed-out worker or serial re-run fails the run;
+likewise a listing script that prints its list and then never exits, or exits while a child holds its pipe, or
+prints nothing and holds it: `list_tests` returns within its graces or `LIST_TIMEOUT`, with the list when it came
+whole) and `TIME_FACTOR`.
 **The test command of the build specs' Hard rules is now the parallel one**, from Git Bash in one Bash call:
 `cd /c/Users/lukem/Python/Projects/qgis-xsections && export PYTHONDONTWRITEBYTECODE=1 XSECTIONS_REALDATA="<the
 copied real-data folder>" && cmd //c "scripts\\run_tests_parallel.bat"` (module names after the .bat for a part;
@@ -1459,3 +1799,33 @@ comment): `test_explorations.test_station_offset_side_direction` (the reverse of
 `test_compat_032` (`REMADE` manual, `NEW_DIRECTIONS`, `OPPOSITE` and `_hits_golden`, the remake writing only the
 direction values and a changed plan, and `test_manual_directions_are_projections`: manual's directions are the
 reverse of basic's, every other value equal).
+
+0.3.6 (decision 27). `test_symbols.py` covers the catalogue (the drop-down's groups, order, names and usual colours,
+the asterisk heading General shapes, the star legacy and never offered), 0.3.5's six shapes kept exactly (frozen
+copies of their 0.3.5 code compared), unknown keys (cleaned on load to the kind's default, drawn as the circle),
+every new symbol's geometry and footprint, resting on the ground line (on the drawn artists), the benchmark centred,
+the spring's tail downhill (and right on flat ground), the artists, the legend fit and the preview's cost;
+`test_symbol_icons.py` every icon at 22 × 16 and at device pixel ratio 2, theme-independent, from the same geometry,
+and the bracket mark (solid and dashed, its ticks solid). `test_other_features.py` covers the four row keys (a 0.3.5
+row loads as itself, `feature_row`, no version step), the kinds, the crossings (each one, touches, the ends, a stretch
+along the line and a short one, one stream split at the line, the placement rules, a missing field, another CRS),
+the pieces (every area, open ends, blank labels, types and a bow tie, A on a polygon's edge in another CRS), the
+build (a row of each kind, the layer deciding the kind, a missing polygon layer, the hover) and a budget (2,000 lines
+and 5,000 polygons, 20 of each on the line, built in 1.5 s); `test_other_features_render.py` the crossings on
+the sheet, the brackets inside the frame (over the ground and the labels, stacking, edge lines that stop at labels),
+Auto and Manual ranges (lowered with the warning, none lost under a manual minimum), above the frame (the band, the
+margins, the furniture moved up, tiles, edge lines that stop at the frame), the legend swatches, the preview laying
+the brackets out at its own scale, and sheets without line or polygon rows drawn as before. The panel:
+`test_panel_widgets.py` (the visual system on its own: the light and dark tokens, the tile and bar and their count
+chip, the body on its rail, the Flare band's pixels and the cards' spacing, the whole-card click, subsections and
+field names, pairs and check-box grids that stack, the painted dashed boxes, Verbose and its hints, which leave no
+hub connection behind, the tabs, the badge, card and host with the 100 ms rule, the swatches, the stylesheet),
+`test_feature_rows.py` (the rows: the three kinds and their editors, the symbol drop-down whose headers are never
+picked, subtitles and icons, the tabs, the guesses and Looks right, problems on a row, Plotted, the lists' spacing
+and bands) and `test_panel_036.py` (the dock: the six sections and every moved control and text, Manual and the
+grid spacing, Verbose in the ⋯ menu, per user and never in the project, the problems, count chips and the check card
+from the dock, the status line, the bands, Other features rows of three kinds from the dock, and nothing cut at
+260 and 340 px in light and dark). Verbose is only ever written in the test profile `start_app` makes; a test that
+turns it on turns it off again (`addCleanup`). Existing tests were edited for the new texts and places only (names in
+sentence case, the shorter texts, Verbose turned on before a hint or readout is read, the six sections, the tabs
+instead of More, "Other features", `guessed` in the rows' key lists), each with its reason in the build reports.

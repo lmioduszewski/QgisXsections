@@ -345,14 +345,16 @@ class DockTests(unittest.TestCase):
                              | QgsFieldProxyModel.Filter.String)
         self.assertEqual([d.top_mode.itemText(i) for i in range(d.top_mode.count())],
                          ["Table, else LIDAR at the exploration", "LIDAR at the exploration", "Table only"])
-        self.assertEqual(d.depth_line.text(), "Draw a line from top to bottom")
-        self.assertEqual(d.td_label.text(), "Label the total depth (TD 50′)")
+        self.assertEqual(d.depth_line.text(), "Depth line")                 # (0.3.6: the mockup's names)
+        self.assertEqual(d.td_label.text(), "TD label")
         self.assertTrue(d.td_label.isChecked() and d.depth_line.isChecked() and d.zero_missing.isChecked())
         self.assertEqual(d.top_max_diff.value(), 25.0)
         self.assertFalse(hasattr(d, "bottom_mode"))
         texts = [w.text() for w in d.grp_depth.findChildren(QLabel)]
-        self.assertIn("Each exploration: top from the table, else LIDAR; bottom from the table, else top − depth.", texts)
-        self.assertIn("Ignore a table top more than", texts)
+        # (0.3.6: the note is each row's Verbose hint on its Depths tab)
+        self.assertEqual(explo_row(d).depths_hint.text(),
+                         "Top from the table, else LIDAR; bottom from the table, else top − depth.")
+        self.assertIn("Ignore a table top off LIDAR by over", texts)
         # enabled states follow the line and the top source
         d.top_mode.setCurrentIndex(d.top_mode.findData("dem"))
         self.assertFalse(explo_row(d).top_field.isEnabled())
@@ -400,6 +402,9 @@ class DockTests(unittest.TestCase):
             d.deleteLater()
 
     def test_sources_readout(self):
+        from xsections.ui import widgets as W
+        W.set_verbose(True)                                  # (0.3.6: the readouts are Verbose notes)
+        self.addCleanup(W.set_verbose, False)
         self.stub()
         self.dock.refresh()
         self.assertEqual(self.dock.depth_readout.text(), "Tops: 1 ExploElev, 1 LIDAR · Bottoms: 2 top − ExploDepth")

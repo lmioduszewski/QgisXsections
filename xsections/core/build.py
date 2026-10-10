@@ -3,16 +3,16 @@ from __future__ import annotations
 
 import math
 import traceback
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsVectorLayer
 
 from .explorations import find_explorations, nearest_distance_ft, read_wl_table
 from .mf6_section import begin_build, model_surface, surface_name
-from .model import (LOOK_GRAY, NO_POINTS, Hit, OtherLayerInfo, OtherPoint, PointLayerInfo, SectionError,
+from .model import (LOOK_GRAY, NO_POINTS, AreaPiece, Hit, OtherLayerInfo, OtherPoint, PointLayerInfo, SectionError,
                     SectionModel, Settings, SurfaceProfile, clean_hidden, clean_other_points, clean_surfaces,
                     hidden_key, layer_rows, layer_view, line_key, point_legend_name)
-from .others import find_other_points
+from .others import feature_kind, find_area_pieces, find_crossings, find_other_points
 from .section import (azimuth_deg, dem_cell_size_ft, ground_profile, line_vertices, raster_sampler,
                       resolve_line, section_crs, surface_profile, vertex_stations)
 from .symbology import read_styles
@@ -59,20 +59,25 @@ def _point_layers(rows: List[dict], project: QgsProject) -> Dict[int, QgsVectorL
     return out
 
 
-def _other_layers(others: List[dict], project: QgsProject, warnings: List[str]) -> Dict[int, QgsVectorLayer]:
-    """The layer of every other-points row that is on, by row index. Other points follow the surfaces rule (DESIGN.md
-    decision 15): a row whose layer is gone, not a point layer or unreadable is left out with a warning."""
-    out: Dict[int, QgsVectorLayer] = {}
+def _other_layers(others: List[dict], project: QgsProject,
+                  warnings: List[str]) -> Dict[int, Tuple[QgsVectorLayer, str]]:
+    """(layer, its kind: point | line | polygon) of every other-points row that is on, by row index. Other points
+    follow the surfaces rule (DESIGN.md decision 15): a row whose layer is gone or unreadable, or (0.3.6) not a point,
+    line or polygon layer, is left out with a warning."""
+    out: Dict[int, Tuple[QgsVectorLayer, str]] = {}
     for j, d in enumerate(others):
         if not (d["visible"] and d["layer_id"]):
             continue
         layer = project.mapLayer(d["layer_id"])
-        if (not isinstance(layer, QgsVectorLayer) or not layer.isValid()
-                or layer.geometryType() != Qgis.GeometryType.Point):
-            label = d["name"].strip() or (layer.name() if layer is not None else "") or f"row {j + 1}"
+        label = d["name"].strip() or (layer.name() if layer is not None else "") or f"row {j + 1}"
+        if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
             warnings.append(f"Other points “{label}”: its layer is no longer in the project; left out.")
             continue
-        out[j] = layer
+        kind = feature_kind(layer)
+        if not kind:
+            warnings.append(f"Other points “{label}”: not a point, line or polygon layer; left out.")
+            continue
+        out[j] = (layer, kind)
     return out
 
 
@@ -185,29 +190,47 @@ def build_section(settings: Settings, project: Optional[QgsProject] = None) -> S
     hits.sort(key=order)
     left_off.sort(key=order)
 
-    # --- other points, row by row (a missing elevation field is an error naming the row)
+    # --- other points, row by row (a missing elevation field is an error naming the row). 0.3.6: a line row gives its
+    #     crossings (they join the points), a polygon row its pieces (drawn as brackets)
     other_infos: List[OtherLayerInfo] = []
     other_points: List[OtherPoint] = []
+    other_areas: List[AreaPiece] = []
     for j, d in enumerate(others):
-        layer = other_layers.get(j)
+        layer, kind = other_layers.get(j, (None, ""))
+        if layer is None:                                # the layer's own kind while it is there, else the row's
+            kind = feature_kind(project.mapLayer(d["layer_id"]) if d["layer_id"] else None) or d["kind"]
         layer_name = layer.name() if layer is not None else _layer_name(project, d["layer_id"])
         oinfo = OtherLayerInfo(index=j, layer_id=d["layer_id"], name=point_legend_name(d, layer_name)
                                or f"row {j + 1}", layer_name=layer_name, shape=d["shape"], color=d["color"],
                                size=d["size"], elev=d["elev"], elev_field=d["elev_field"],
-                               elev_empty=d["elev_empty"], on=layer is not None, row=d)
+                               elev_empty=d["elev_empty"], on=layer is not None, row=d, kind=kind,
+                               bracket=d["bracket"], bracket_style=d["bracket_style"], edges=d["edges"])
         other_infos.append(oinfo)
         if layer is None:
             continue
         try:
-            pts, o_beyond, o_near, no_elev = find_other_points(line, layer, d, settings, crs, sampler, dist_factor,
-                                                               project, ground)
+            if kind == "polygon":
+                pieces = find_area_pieces(line, layer, d, crs, dist_factor, project)
+            elif kind == "line":                         # crossings: none beyond the ends, none near
+                pts, no_elev = find_crossings(line, layer, d, settings, crs, sampler, dist_factor, project, ground)
+                o_beyond, o_near = [], 0
+            else:
+                pts, o_beyond, o_near, no_elev = find_other_points(line, layer, d, settings, crs, sampler,
+                                                                   dist_factor, project, ground)
         except SectionError as exc:
             raise SectionError(f"{oinfo.name}: {exc}") from None
+        if kind == "polygon":
+            for a in pieces:
+                a.layer_index, a.layer_id, a.layer_name = j, d["layer_id"], oinfo.name
+            oinfo.plotted = len(pieces)
+            other_areas += pieces
+            continue
         for p in pts:
             p.layer_index, p.layer_id, p.layer_name = j, d["layer_id"], oinfo.name
         oinfo.plotted, oinfo.near, oinfo.beyond, oinfo.no_elevation = len(pts), o_near, o_beyond, no_elev
         other_points += pts
     other_points.sort(key=lambda p: (p.station, p.layer_index, p.label))
+    other_areas.sort(key=lambda a: (a.start, a.layer_index, a.label))
 
     if not layers and not other_layers:
         warnings.append(NO_POINTS)
@@ -266,6 +289,7 @@ def build_section(settings: Settings, project: Optional[QgsProject] = None) -> S
         other_points=other_points,
         other_layers=other_infos,
         line_key=lk,
+        other_areas=other_areas,
     )
 
 

@@ -77,7 +77,7 @@ class Cleaners(unittest.TestCase):
         self.assertNotIn("extra", d)
         self.assertEqual((d["layer_id"], d["look"], d["wl_atd_values"]), ("L", "gray", ["ATD"]))
         self.assertEqual(list(POINT_LAYER_DEFAULTS)[:5], ["layer_id", "visible", "name", "look", "in_range"])
-        self.assertEqual(set(FLAT_LAYER_KEYS.values()) | {"visible", "name", "look", "in_range"},
+        self.assertEqual(set(FLAT_LAYER_KEYS.values()) | {"visible", "name", "look", "in_range", "guessed"},
                          set(POINT_LAYER_DEFAULTS))
         self.assertEqual(len(FLAT_LAYER_KEYS), 21)
         self.assertEqual(FLAT_LAYER_KEYS["points_layer_id"], "layer_id")

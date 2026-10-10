@@ -250,17 +250,21 @@ class OtherPointsCore(unittest.TestCase):
         self.assertFalse(any(w.startswith("Other points") for w in m.warnings))
 
     def test_a_missing_layer_is_left_out_with_a_warning(self):
+        # (0.3.6: a line layer is a valid Other features row; a layer with no geometry stands for the wrong kind)
+        table = QgsVectorLayer("None?field=name:string", "Lab table", "memory")
+        self.prj.addMapLayer(table)
+        self.addCleanup(self.prj.removeMapLayer, table.id())
         rows = [seep_row(layer_id="gone", name="Springs"), seep_row(layer_id="gone2"), seeps(self.seeps),
-                seep_row(self.lines, label_field="name"), seep_row(layer_id="gone3", visible=False)]
+                seep_row(table, label_field="name"), seep_row(layer_id="gone3", visible=False)]
         m, _ = self.build(rows, [point_row(self.pts, label_field="ExploName")])
         self.assertEqual(len(m.hits), 7)                                     # the explorations are still built
         self.assertEqual([p.label for p in m.other_points], ON_SECTION)
         gone = [w for w in m.warnings if w.startswith("Other points")]
         self.assertEqual(gone, ["Other points “Springs”: its layer is no longer in the project; left out.",
                                 "Other points “row 2”: its layer is no longer in the project; left out.",
-                                "Other points “Section_Lines”: its layer is no longer in the project; left out."])
+                                "Other points “Lab table”: not a point, line or polygon layer; left out."])
         self.assertEqual([o.on for o in m.other_layers], [False, False, True, False, False])
-        self.assertEqual([o.name for o in m.other_layers], ["Springs", "row 2", "Seeps", "Section_Lines", "row 5"])
+        self.assertEqual([o.name for o in m.other_layers], ["Springs", "row 2", "Seeps", "Lab table", "row 5"])
         # the order of the warnings: after the DEM notes, before the explorations' notes
         i = m.warnings.index(gone[0])
         self.assertLess(m.warnings.index(next(w for w in m.warnings if w.startswith("No DEM data along"))), i)

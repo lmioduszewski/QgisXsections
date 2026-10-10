@@ -58,8 +58,11 @@ def note_texts(model: SectionModel, settings: Settings, plan: Plan, page: PageLa
                   "projected perpendicular onto it.")
         if settings.label_offset:
             note3 += " Labels give the distance and direction each exploration was projected onto the section line."
-    for name, how, _ in _other_notes(model):
-        note3 += f" {name} within {fmt_num(settings.tolerance_ft)} ft of the section line: {how}."
+    for name, how, _, kind in _other_notes(model):
+        if kind == "line":                               # (0.3.6) a line row's crossings
+            note3 += f" {name} where they cross the section line: {how}."
+        else:
+            note3 += f" {name} within {fmt_num(settings.tolerance_ft)} ft of the section line: {how}."
     views = _hit_views(model, settings)
     if any(draws_depth_line(h, settings) for h in model.hits):
         note3 += " " + depth_sources_text(settings, _draws_any_td(model, settings, plan),
@@ -134,11 +137,13 @@ def _other_how(info: Any) -> Tuple[str, str]:
     return "on the ground line", "on the ground line"
 
 
-def _other_notes(model: SectionModel) -> List[Tuple[str, str, str]]:
-    """(legend name, how, how short) per other-points row with a point on the section, in row order."""
+def _other_notes(model: SectionModel) -> List[Tuple[str, str, str, str]]:
+    """(legend name, how, how short, kind) per other-points row with a point on the section, in row order; kind is
+    the row's (OtherLayerInfo.kind): "point", or "line" for a line row's crossings (0.3.6; a polygon row has no
+    point: the legend names it)."""
     with_points = {p.layer_index for p in getattr(model, "other_points", None) or []}
-    return [(info.name,) + _other_how(info) for j, info in enumerate(getattr(model, "other_layers", None) or [])
-            if j in with_points]
+    return [(info.name,) + _other_how(info) + (getattr(info, "kind", "point"),)
+            for j, info in enumerate(getattr(model, "other_layers", None) or []) if j in with_points]
 
 
 def screens_sources(model: SectionModel, settings: Settings, z_min: Optional[float] = None,
@@ -267,7 +272,7 @@ def compact_notes(model: SectionModel, settings: Settings, plan: Plan, page: Pag
             line2.append(NotePart("Arrow at frame bottom: deeper, TD beside it", 0))
     if model.has_explorations and settings.label_offset:
         line2.append(NotePart("Labels: distance and direction projected onto the line"))
-    for name, _, short in _other_notes(model):
+    for name, _, short, _ in _other_notes(model):
         line2.append(NotePart(f"{name}: {short}", 3))
     for text, rank in ((screens_sources(model, settings, plan.z_min, plan.z_max), 3), (surfaces_sources(model), 4)):
         if text:
