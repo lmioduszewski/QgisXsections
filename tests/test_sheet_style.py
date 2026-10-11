@@ -79,8 +79,9 @@ class Layout(StyleCase):
 
     def test_the_mockup_order(self):
         """(0.3.6, the panel mockup) Grid: Look, its preset line or the Custom table (with the spacing note and Start
-        from), Spacing from the scale, the typed spacing, Fill sheet | Below lowest; Depth lines (Reset in its
-        heading): Black & gray | Color, the hint; Page: Printer edge, the checkboxes, the hint."""
+        from), Spacing from the scale, the typed spacing (0.3.7: Fill sheet | Room below lowest went to Scale & sheet
+        › Elevations); Depth lines (Reset in its heading): Black & gray | Color, the hint; Page: Printer edge, the
+        checkboxes, the hint."""
         d = self.dock
         body = d.grp_style.body_layout
         subs = [body.itemAt(i).widget() for i in range(body.count())]
@@ -91,7 +92,7 @@ class Layout(StyleCase):
             top = [lay.itemAt(i).widget() for i in range(lay.count())]
             return [next(i for i, t in enumerate(top) if t is w or t.isAncestorOf(w)) for w in widgets]
 
-        grid = [d.grid_color, d.grid_info, d.grid_custom_box, d.grid_auto, d.grid_spacing_row, d.fill_grid]
+        grid = [d.grid_color, d.grid_info, d.grid_custom_box, d.grid_auto, d.grid_spacing_row]
         self.assertEqual(indexes(subs[0], grid), list(range(1, len(grid) + 1)))          # (0: the heading)
         self.assertEqual(indexes(subs[1], [d.depth_lw_head, d.depth_lw_black, d.depth_lw_hint]), [0, 1, 2])
         self.assertEqual(indexes(subs[2], [d.edge_margin, d.compact_layout, d.style_hint]), [1, 2, 3])
@@ -148,7 +149,8 @@ class Layout(StyleCase):
         self.assertEqual(d.grid_info.text(), GRAY_LINE)
         self.assertEqual((d.grid_info.isHidden(), d.grid_custom_box.isHidden()), (False, True))
         self.click(d.grid_color, "custom")
-        self.assertEqual((d.grid_info.isHidden(), d.grid_custom_box.isHidden()), (True, False))
+        self.assertEqual((d.grid_info.isHidden(), d.grid_custom_box.isHidden()), (False, False))   # (0.3.7: its words)
+        self.assertEqual(d.grid_info.text(), "Major: solid · Minor: solid")
         self.click(d.grid_color, "green")
         self.assertEqual((d.grid_info.text(), d.grid_custom_box.isHidden()), (GREEN_LINE, True))
 
@@ -157,7 +159,7 @@ class Layout(StyleCase):
         for part in ("major", "minor"):
             seg = getattr(d, f"grid_{part}_style")
             self.assertEqual(seg.toolTip(), f"{part.capitalize()} grid line style")
-            self.assertEqual([seg.itemData(i) for i in range(seg.count())], ["solid", "dash", "dot"])
+            self.assertEqual([seg.itemData(i) for i in range(seg.count())], ["solid", "dash", "dot", "none"])
             for b, name in zip(seg.buttons(), ("Solid", "Dashed", "Dotted")):
                 self.assertEqual(b.toolButtonStyle(), Qt.ToolButtonStyle.ToolButtonIconOnly)
                 self.assertEqual((b.accessibleName(), b.toolTip()), (name, name))
@@ -343,7 +345,7 @@ class Chip(StyleCase):
         d.grid_major_width.setValue(2.0)               # a Custom value under Green: still the defaults
         self.assertEqual(self.chip(), "Defaults")
         self.assertEqual(D.STYLE_KEYS, ("grid_color", "depth_lw_black", "depth_lw_color", "shade_below", "show_bends",
-                                        "compact_layout", "edge_margin_in", "show_notes", "fill_grid"))
+                                        "compact_layout", "edge_margin_in", "show_notes"))
 
 
 class Keeping(StyleCase):

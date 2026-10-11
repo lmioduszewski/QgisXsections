@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from ..core.model import Hit, PageLayout, Plan, SectionModel, Settings, layer_view
+from ..core.model import Hit, PageLayout, Plan, SectionModel, Settings, grid_drawn, layer_view
 from .scales import (draws_depth_line, draws_td_label, engineer_face, fmt_in, fmt_num, frame_levels, hit_in_range,
                      ratio, runs_below)
 
@@ -32,6 +32,17 @@ def grid_text(plan: Plan, settings: Settings) -> Tuple[str, str]:
     return major, minor
 
 
+def _grid_words(plan: Plan, settings: Settings) -> Tuple[List[str], List[str]]:
+    """The grid as the notes name it, only the sets drawn (grid_drawn; 0.3.7: a "none" set is left out): (["1 in
+    major", "0.1 in minor"], ["100 × 10 ft", "10 × 1 ft"]), the words and their spans (non-breaking); both None: ([],
+    []). note_texts and compact_notes both use it, so the plan sizes the standard block for the text drawn."""
+    major, minor = grid_text(plan, settings)
+    spans = (_nb(f"{fmt_num(plan.h_major)} × {fmt_num(plan.v_major)} ft"),
+             _nb(f"{fmt_num(plan.h_minor)} × {fmt_num(plan.v_minor)} ft"))
+    drawn = grid_drawn(settings)
+    return ([w for w, d in zip((major, minor), drawn) if d], [t for t, d in zip(spans, drawn) if d])
+
+
 def note_texts(model: SectionModel, settings: Settings, plan: Plan, page: PageLayout,
                frame: bool = True) -> List[str]:
     """The two notes under the plot of the standard layout (figure.notes_text draws them wrapped): the scales, grid
@@ -40,15 +51,15 @@ def note_texts(model: SectionModel, settings: Settings, plan: Plan, page: PageLa
     estimate of the notes, made before the frame is known: never shorter than the drawn ones)."""
     H, V = settings.h_scale, settings.v_scale
     fh, fv = engineer_face(H), engineer_face(V)
-    major, minor = grid_text(plan, settings)
+    words, spans = _grid_words(plan, settings)
     parts = [
         f"HORIZONTAL {_nb(f'1 in = {fmt_num(H)} ft')} ({ratio(H)})" + (f", {fh} scale" if fh else ""),
         f"VERTICAL {_nb(f'1 in = {fmt_num(V)} ft')} ({ratio(V)})" + (f", {fv} scale" if fv else ""),
         f"VERTICAL EXAGGERATION {fmt_num(H / V)}×",
-        f"GRID {major}, {minor} ({_nb(f'{fmt_num(plan.h_major)} × {fmt_num(plan.v_major)} ft')}; "
-        f"{_nb(f'{fmt_num(plan.h_minor)} × {fmt_num(plan.v_minor)} ft')})",
-        f"SHEET {page.sheet_name}",
     ]
+    if words:                                            # (0.3.7) only the drawn sets; both None: no GRID part
+        parts.append(f"GRID {', '.join(words)} ({'; '.join(spans)})")
+    parts.append(f"SHEET {page.sheet_name}")
     note2 = " · ".join(parts)
     datum = f" ({settings.vertical_datum})" if settings.vertical_datum else ""
     dem = model.dem_name or "DEM"
@@ -254,12 +265,13 @@ def compact_notes(model: SectionModel, settings: Settings, plan: Plan, page: Pag
     datum is in the elevation title, so it is not repeated here."""
     H, V = settings.h_scale, settings.v_scale
     fh, fv = engineer_face(H), engineer_face(V)
-    major, minor = grid_text(plan, settings)
+    words, _ = _grid_words(plan, settings)
     line1 = [NotePart(f"H 1 in = {fmt_num(H)} ft ({ratio(H)})" + (f", {fh} scale" if fh else "")),
              NotePart(f"V 1 in = {fmt_num(V)} ft ({ratio(V)})" + (f", {fv} scale" if fv else "")),
-             NotePart(f"VE {fmt_num(H / V)}×", 1),
-             NotePart(f"GRID {major}, {minor}", 2),
-             NotePart(page.sheet_name.split(",")[0], 3)]          # "Letter 11 × 8.5 in"
+             NotePart(f"VE {fmt_num(H / V)}×", 1)]
+    if words:                                            # (0.3.7) only the drawn sets; both None: no GRID part
+        line1.append(NotePart(f"GRID {', '.join(words)}", 2))
+    line1.append(NotePart(page.sheet_name.split(",")[0], 3))      # "Letter 11 × 8.5 in"
     dem = model.dem_name or "DEM"
     line2 = [NotePart(f"Ground: {dem}, every {fmt_num(model.ground.step)} ft", 0, dem)]
     if model.has_explorations:

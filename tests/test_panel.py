@@ -139,23 +139,26 @@ class SectionTests(PanelCase):
         self.assertEqual([s.title() for s in d.sections],
                          ["Line", "Surfaces", "Explorations", "Other features", "Scale & sheet", "Sheet style"])
         self.assertEqual(d.sections, [d.grp_line, d.grp_ground, d.grp_explo, d.grp_other, d.grp_export, d.grp_style])
-        # (0.3.6: Depths and Water & screens are subsections of Explorations)
-        self.assertTrue(d.grp_explo.isAncestorOf(d.grp_depth) and d.grp_explo.isAncestorOf(d.grp_screens))
+        # (0.3.6: Depths and Water & screens are subsections of Explorations; 0.3.7: popups of its option buttons)
+        self.assertTrue(d.grp_depth is d.pop_depths and d.grp_screens is d.pop_water)
+        self.assertTrue(all(p in d.opt_grid.popups() for p in (d.grp_depth, d.grp_screens)))
         r = explo_row(d)
         # every widget sits in its section (readouts included)
         for grp, widgets in ((d.grp_line, (d.line_layer, d.btn_pick, d.btn_reverse, d.btn_save_line, d.line_readout)),
                              (d.grp_ground, (d.dem_layer, d.dem_band, d.z_units, d.datum, d.btn_add_surface,
                                              d.btn_add_bands, d.btn_add_mf6, d.ground_readout)),
-                             (d.grp_explo, (r.layer_combo, r.type_list, d.label_dir, d.label_text, d.explo_readout,
+                             (d.grp_explo, (r.layer_combo, r.type_list, d.opt_grid, d.explo_readout,
                                             r.screen_values, r.wl_values, r.wl_table, r.wl_atd_values)),
+                             (d.pop_all, (d.label_dir, d.label_text)),
                              (d.grp_depth, (d.depth_line, d.top_mode, d.top_max_diff, d.td_label, d.depth_readout)),
                              (d.grp_screens, (d.screens, d.wl_label, d.screens_readout)),
                              (d.grp_other, (d.other_list, d.btn_add_other, d.other_readout)),
-                             (d.grp_export, (d.h_scale, d.fmt, d.z_mode, d.tile, d.allowed_sheets, d.export_readout)),
-                             (d.grp_style, (d.grid_color, d.fill_grid, d.compact_layout, d.shade_below,
+                             (d.grp_export, (d.h_scale, d.fmt, d.z_mode, d.tile, d.fill_grid, d.export_readout)),
+                             (d.grp_style, (d.grid_color, d.compact_layout, d.shade_below,
                                             d.grid_major_color, d.depth_lw_black, d.btn_lw_reset))):
             for w in widgets:
                 self.assertTrue(grp.isAncestorOf(w), (grp.title(), w))
+        self.assertFalse(hasattr(d, "allowed_sheets"))                  # (0.3.7: the Size list's check boxes)
         self.assertIn(d.btn_csv, d.btn_more.menu().actions())          # Export points CSV… in the ⋯ menu
 
     def test_all_collapsed_on_creation_restore_clear_and_reopen(self):
@@ -357,7 +360,8 @@ class SegmentedTests(unittest.TestCase):
             dock.restore_from_project()
             expect = {"label_dir": [True, False], "z_mode": ["auto", "manual"],
                       "distance_labels": ["feet", "station"], "grid_color": ["green", "gray", "custom"],
-                      "grid_major_style": ["solid", "dash", "dot"], "grid_minor_style": ["solid", "dash", "dot"],
+                      "grid_major_style": ["solid", "dash", "dot", "none"],
+                      "grid_minor_style": ["solid", "dash", "dot", "none"],
                       "edge_margin": [0.5, 0.3], "fill_grid": ["off", "below", "both"],
                       "screen_values": ["elevation", "depth"], "wl_values": ["elevation", "depth"],
                       "wl_label": ["off", "elev", "elev_date"]}

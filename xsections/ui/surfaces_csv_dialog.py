@@ -403,5 +403,5 @@ class SurfacesCsvDialog(QDialog):
     def _own_style(self) -> str:
         t = theme_for(self.palette())
         return (f"QWidget#xsCsvLines {{ background: transparent; }}"
-                f"QTextEdit#xsCsvPreview {{ background: {t.field.name()}; color: {t.ink.name()};"
+                f"QTextEdit#xsCsvPreview {{ background: {t.field.name()}; color: {t.field_ink.name()};"
                 f" border: 1px solid {t.field_line.name()}; border-radius: 3px; }}")

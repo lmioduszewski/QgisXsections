@@ -20,7 +20,8 @@ from .widgets import CARD_ITEMS, CardInfo, Problem
 NOTE_PREFIXES = ("Left out past the ends", "No DEM data along")      # notes (readouts) or a row's problem
 SCREEN_FLAG = re.compile(r"screen|water|\bwl\b|\batd\b", re.IGNORECASE)   # a flag about screens or water levels
 # core texts that name 0.3.5's panel (the core is not edited by the panel build): shown with the place of today
-OLD_PLACES = (("Surfaces > More: units and datum", "Surfaces › Units & datum"),)
+OLD_PLACES = (("Surfaces > More: units and datum", "Surfaces › Units & datum"),
+              ("(see Plotted explorations)", "(see Explorations › Plotted)"))
 UNITS_WORDS = "does not state its"      # a units assumption: the status line, never a row (choice 14)
 
 # a water-level table's not-number warning (core.explorations._not_numbers_warning)

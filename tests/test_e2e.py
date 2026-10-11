@@ -342,7 +342,7 @@ class SyntheticEndToEnd(E2ECase):
         d.fill_grid.setCurrentIndex(d.fill_grid.findData("below"))
         d.h_scale.setEditText("100")
         d.v_scale.setEditText("10")
-        d.sheet.setCurrentIndex(d.sheet.findData("tabloid"))
+        d.sheet.setChecks(["tabloid"], emit=True)            # (0.3.7: the Size list's check boxes)
         d.refresh()
         p = d.plan
         n = len(p.pages)

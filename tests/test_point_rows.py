@@ -847,7 +847,7 @@ class Plotted(_Layers):
         dt = time.perf_counter() - t0
         self.assertLessEqual(dt, budget(0.3), f"PlottedList.set_entries of 1,000 entries: {dt:.3f} s")
         self.assertEqual(len(pl.items()), 1000)
-        self.assertEqual(pl.tree.height(), 210)
+        self.assertEqual(pl.tree.height(), R.PLOTTED_MAX_H)
 
 
 class RowLists(_Layers):

@@ -3,9 +3,9 @@ decision 27: the redesigned panel).
 
 - TypeList: the ticked type values of a row's type field, with "plotted / in the layer" counts and a "(no value)"
   row for the NULL-or-empty value.
-- PlottedList: the Plotted subsection of Explorations (0.3.6: its heading "PLOTTED" with Show all; the old title
-  "Plotted explorations (N of M, K left off by you)" is the heading's tooltip): every exploration the rows choose on
-  this section, grouped by row; unticking one leaves it off this section line (the dock keeps the list,
+- PlottedList: the Plotted popup's content (0.3.7: no heading; the count "N of M" and Show all sit in the popup's
+  header, the old title "Plotted explorations (N of M, K left off by you)" is their tooltip): every exploration the
+  rows choose on this section, grouped by row; unticking one leaves it off this section line (the dock keeps the list,
   Settings.hidden_points).
 - PointRowList: the list of rows of the Explorations and Other features sections (moves, removes, renumbering; 0.3.6:
   the rows are layer cards, spaced for their bands by widgets.link_cards and painted open by their section's body,
@@ -64,7 +64,7 @@ from ..render.symbols import LEGACY_KEYS, SYMBOLS, grouped, usual_color
 from . import point_guess as G
 from .symbol_icons import symbol_icon
 from .widgets import (MEDIUM, CardInfo, ClickableArea, ElidedLabel, ExploSwatch, Hint, LayerCard, Problem, RowTabs,
-                      StyleChips, SubsectionHeading, SymbolSwatch, _esc, _field_combo, _narrow, _note,
+                      StyleChips, SymbolSwatch, _esc, _field_combo, _narrow, _note,
                       _numeric_field_combo, _px_font, _segmented, _set_combo_data, _spin, field_box, field_kind,
                       link_button, link_cards, pair, set_field, theme_for)
 
@@ -75,7 +75,7 @@ BLACK_INK = "#111111"                  # the Black look's swatch
 SCAN_LIMIT = 200_000                   # a type list counts the values of layers up to this size (else values only)
 TEXT_SAMPLE = 50                       # a text field holds numbers when one of its first 50 values (not empty) ...
 TEXT_ROWS = 2_000                      # ... in its first 2,000 rows is a number (number_texts, 0.3.5)
-PLOTTED_MAX_H = 210                    # px, the Plotted explorations list
+PLOTTED_MAX_H = 252                    # px, the Plotted explorations list (0.3.7: the mockup's popup list; 210 before)
 ROW_MENU_TIP = "Move up, move down, remove"     # a row's ⋯ button
 
 # an Other features row's choices (0.3.6: the mockup's short names; the buttons' tooltips say the rest)
@@ -507,11 +507,12 @@ Entry = Tuple[str, int, str, str, bool]          # (layer id, fid, label, detail
 
 
 class PlottedList(QWidget):
-    """The Plotted subsection of Explorations (0.3.6, D11; a Disclosure before): the heading "PLOTTED" with Show all
-    (and, with Verbose, "N of M" beside it), then every exploration the rows choose on this section, grouped by row (a
-    bold muted title), each with a tick, its label and "station · offset side". Unticking one emits toggled(layer id,
-    fid, False); the dock keeps the list. Filling (set_entries, on every refresh) is silent. text() is the old title,
-    "Plotted explorations (N of M, K left off by you)", also the heading's tooltip."""
+    """The Plotted popup's content (0.3.7, D3: no heading; the count and Show all sit in the popup's header, which the
+    dock builds from count_label and btn_show_all; a subsection in 0.3.6, a Disclosure before): every exploration the
+    rows choose on this section, grouped by row (small capital titles), each with a tick, its label (semibold) and
+    "station · offset side · direction". Unticking one emits toggled(layer id, fid, False); the dock keeps the list.
+    Filling (set_entries, on every refresh) is silent and keeps the list's scroll position. text() is the old title,
+    "Plotted explorations (N of M, K left off by you)", the tooltip of the count (and of the popup's title)."""
 
     toggled = pyqtSignal(str, int, bool)        # a user's tick: (layer id, fid, plotted)
     showAllRequested = pyqtSignal()
@@ -524,17 +525,21 @@ class PlottedList(QWidget):
         self._filling = 0
         self._counts: Optional[Tuple[int, int]] = None      # (plotted, chosen); None: no model
         self._title = self.TITLE
-        self.count_label = Hint("", rich=False)               # "N of M": a note beside the heading (Verbose)
-        self.count_label.setWordWrap(False)
+        # the popup header's parts: "N of M" (always shown with a model) and Show all; children of the list until the
+        # dock puts them in the Plotted popup's header (never windows of their own)
+        self.count_label = QLabel("", self)
+        self.count_label.setObjectName("xsPopCount")
+        self.count_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.count_label.setFont(_px_font(self.count_label.font(), 11.0))
+        self.count_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.count_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.count_label.setWanted(False)
+        self.count_label.hide()
         self.btn_show_all = link_button("Show all", "Plot every exploration you left off on this section")
+        self.btn_show_all.setParent(self)
         self.btn_show_all.setFont(_px_font(self.btn_show_all.font(), 11.0, MEDIUM))
-        self.heading = SubsectionHeading("Plotted", right=[self.count_label, self.btn_show_all])
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 12, 0, 0)    # a subsection that is not its body's first (widgets.Subsection)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
-        lay.addWidget(self.heading)
         self.tree = QTreeWidget()
         self.tree.setObjectName("xsPlottedList")
         self.tree.setColumnCount(2)
@@ -545,6 +550,7 @@ class PlottedList(QWidget):
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
         self.tree.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tree.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)    # (0.3.7: kept across a refill)
         self.tree.setMaximumHeight(PLOTTED_MAX_H)
         hdr = self.tree.header()
         hdr.setStretchLastSection(False)
@@ -555,6 +561,7 @@ class PlottedList(QWidget):
         self.empty_label = _note("Nothing chosen yet.")
         lay.addWidget(self.empty_label)
         self.hint = Hint("Untick one to leave it off this section only.")
+        self.hint.setContentsMargins(2, 0, 2, 0)            # (10 px from the popup's edge, as the mockup's hint)
         lay.addWidget(self.hint)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.tree.itemChanged.connect(self._on_item_changed)
@@ -568,7 +575,10 @@ class PlottedList(QWidget):
     # ---- filling (silent)
     def set_entries(self, groups: Optional[Sequence[Tuple[str, Sequence[Entry]]]]) -> None:
         """One group per row: (title, [(layer id, fid, label, detail, plotted)]), shown in the order given (the dock
-        sorts them by station). None (a failed build, no model): no entries and the plain title."""
+        sorts them by station). None (a failed build, no model): no entries and the plain title. The list keeps its
+        scroll position (0.3.7: a refresh after each tick refills it under his pointer)."""
+        bar = self.tree.verticalScrollBar()
+        scrolled = bar.value()
         self._filling += 1
         self.tree.setUpdatesEnabled(False)
         try:
@@ -576,10 +586,8 @@ class PlottedList(QWidget):
             t = theme_for(self.palette())
             muted = QBrush(t.muted)
             base = QFont(self.tree.font())
-            title_font = QFont(base)
-            title_font.setWeight(QFont.Weight.Bold)
-            if title_font.pointSizeF() > 0:
-                title_font.setPointSizeF(max(6.5, title_font.pointSizeF() * 0.84))
+            title_font = _px_font(base, 9.5, QFont.Weight.Bold, 7.0)        # (the mockup's small capitals)
+            detail_font = _px_font(base, 10.5)
             items, titles = [], []
             plotted = chosen = 0
             for title, entries in groups or []:
@@ -596,6 +604,7 @@ class PlottedList(QWidget):
                     it.setData(0, self.KEY, (str(layer_id), int(fid)))
                     it.setData(0, self.STATE, bool(on))
                     it.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    it.setFont(1, detail_font)
                     it.setForeground(1, muted)
                     self._style(it, bool(on), base, muted)
                     items.append(it)
@@ -612,12 +621,17 @@ class PlottedList(QWidget):
         self.tree.setHidden(not has)
         self.empty_label.setHidden(has)
         self._fit()
+        if scrolled and has:
+            self.tree.doItemsLayout()                      # (the scroll range of the new items, now)
+            bar.setValue(min(scrolled, bar.maximum()))
         self._write_title()
 
     def _style(self, item: QTreeWidgetItem, on: bool, base: Optional[QFont] = None,
                muted: Optional[QBrush] = None) -> None:
-        """A left-off exploration: muted and struck through."""
+        """An exploration's name: semibold (0.3.7, the mockup's bold names; on both paths, a fill and a tick); left
+        off, muted and struck through."""
         f = QFont(base if base is not None else self.tree.font())
+        f.setWeight(QFont.Weight.DemiBold)
         f.setStrikeOut(not on)
         item.setFont(0, f)
         if on:
@@ -631,7 +645,8 @@ class PlottedList(QWidget):
         self.tree.setFixedHeight(min(PLOTTED_MAX_H, max(1, n) * max(row, 12) + 2 * self.tree.frameWidth() + 2))
 
     def _write_title(self) -> None:
-        """The title (text(), the heading's tooltip) and, with a model, "N of M" beside the heading."""
+        """The title (text(), the count's tooltip) and, with a model, "N of M" (the popup header's count, shown
+        whatever Verbose is)."""
         if self._counts is None:
             self._title, count = self.TITLE, ""
         else:
@@ -639,10 +654,9 @@ class PlottedList(QWidget):
             k = m - n
             self._title = f"{self.TITLE} ({n} of {m}, {k} left off by you)" if k else f"{self.TITLE} ({n} of {m})"
             count = f"{n} of {m}"
-        self.heading.setToolTip(self._title)
         self.count_label.setText(count)
         self.count_label.setToolTip(self._title)
-        self.count_label.setWanted(bool(count))
+        self.count_label.setHidden(not count)
 
     # ---- reading
     def counts(self) -> Optional[Tuple[int, int, int]]:
@@ -1943,7 +1957,7 @@ class _SymbolDelegate(QStyledItemDelegate):
                 icon.paint(p, QRect(r.x() + 9, r.y() + (r.height() - 16) // 2, 22, 16))
             font = _px_font(base, 11.5)
             p.setFont(font)
-            p.setPen(t.on_bar if current else t.ink)
+            p.setPen(t.on_bar if current else t.field_ink)
             tr = r.adjusted(9 + 22 + 7, 0, -9, 0)
             p.drawText(tr, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, tr.width()))

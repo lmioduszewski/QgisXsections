@@ -1,8 +1,9 @@
 """Reusable widgets of the XSections panel.
 
 - Theme: the panel's colors (0.3.6: the approved panel mockup's light and dark tokens, the dark ones fixed, no longer
-  the palette's highlight; ink, field and disabled still from the QGIS palette), and panel_stylesheet(), a stylesheet
-  whose rules are all scoped by objectName so that it only styles the panel's own widgets.
+  the palette's highlight; ink, field and disabled still from the QGIS palette, 0.3.7 finish: but ink and disabled
+  where they would not read on the dark tokens, contrast()), and panel_stylesheet(), a stylesheet whose rules are all
+  scoped by objectName so that it only styles the panel's own widgets.
 - CollapsibleSection (0.3.6, DESIGN.md decision 27, the three levels you can tell apart): a SectionHeader (closed: a
   solid tile; open: the navy bar; its summary chip and an amber count chip) over a SectionBody (the open section's
   framed body on a 4 px navy rail, which paints the Flare bands of its open layer cards); Subsection /
@@ -11,7 +12,10 @@
 - SegmentedControl: buttons for a short choice, with the QComboBox API the panel uses.
 - field_box / pair / hrow / check_row / add_button: small labels above fields, two fields to a row, check boxes side
   by side, the dashed "+ Add layer" button.
-- Disclosure (0.3.6): a round pill ("Units & datum", "Checks", "Distances & printers") opening into a dashed box.
+- Disclosure (0.3.6): a round pill ("Units & datum") opening into a dashed box.
+- OptionButton / OptionPopup / OptionGrid (0.3.7): a section's option buttons and the popup each opens (one at a time,
+  closed by a second click, ✕, Esc or a press elsewhere); ElidedComboBox; SheetSizeCombo (the Size list: a check box
+  per sheet size, an exclusive Custom).
 - Verbose (0.3.6): the per-user switch (verbose(), set_verbose(), verbose_hub(); QgsSettings "xsections/verbose"),
   and Hint / Readout, the explanatory lines that show under their controls only with Verbose on.
 - LayerCard (0.3.6): a layer row of Surfaces, Explorations or Other features. Closed, a small card; open, its header
@@ -30,11 +34,12 @@
   _segmented, _narrow, _spin, _set_combo_data, _field_combo, _numeric_field_combo, _cbox, _note, _esc and set_field
   (the panel's rule for filling one field box, ui.point_guess.pick_field). 0.3.5: a number box lists number AND text
   fields (NUMBER_BOX_FILTERS: a CSV opened by OGR has only text fields), field_kind tells them apart for the guesses.
+  0.3.7 finish: wrap_tip / tip_text, a long tooltip wrapped at TIP_W px.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from qgis.core import Qgis, QgsFieldProxyModel, QgsProject, QgsRasterLayer
 from qgis.gui import (QgsColorButton, QgsDoubleSpinBox, QgsFieldComboBox, QgsMapLayerComboBox,
@@ -43,10 +48,11 @@ from qgis.PyQt.QtCore import (QByteArray, QEvent, QMetaType, QObject, QPoint, QP
                               QTimer, pyqtSignal, pyqtSlot)
 from qgis.PyQt.QtGui import (QColor, QFont, QFontMetrics, QFontMetricsF, QIcon, QLinearGradient, QPainter,
                              QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
-from qgis.PyQt.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QBoxLayout, QCheckBox, QComboBox,
-                                 QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout, QLabel, QLayout,
-                                 QLineEdit, QMenu, QPushButton, QSizePolicy, QStyle, QStyleOptionSpinBox,
-                                 QStyleOptionToolButton, QToolButton, QToolTip, QVBoxLayout, QWidget)
+from qgis.PyQt.QtWidgets import (QAbstractButton, QAbstractScrollArea, QAbstractSpinBox, QApplication, QBoxLayout,
+                                 QCheckBox, QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
+                                 QLabel, QLayout, QLineEdit, QMenu, QPushButton, QScrollBar, QSizePolicy, QStyle,
+                                 QStyleOptionComboBox, QStyleOptionSpinBox, QStyleOptionToolButton, QStylePainter,
+                                 QToolButton, QToolTip, QVBoxLayout, QWidget)
 
 from ..core.model import SURFACE_DEFAULTS, clean_surface
 from . import settings_store
@@ -73,6 +79,17 @@ BADGE_H = 18                           # the check badge
 CARD_W = 272                           # the check card (narrower panels: the panel width - 8)
 CARD_CLOSE_MS = 100                    # the card closes this long after the pointer left badge and card
 CARD_ITEMS = 8                         # term -> value lines shown on a card block before "… and N more"
+# 0.3.7 (the option buttons and their popups, the Size list; the approved mockup's rounds 6 and 8)
+OPT_H = 42                             # an option button (the mockup's .opt)
+OPT_GAP = 6                            # between option buttons, both ways
+OPT_RADIUS = 5                         # an option button's corners
+POP_RADIUS = 6                         # an option popup's corners
+NOTCH_H = 7                            # the popup's notch: its apex this far above the box, touching its button's
+                                       # bottom edge
+NOTCH_HALF = 7                         # half the notch's width where it meets the box's top edge
+POP_ROOM = 8                           # px kept free under an open popup at the bottom of the panel's content
+SIZE_LIST_W = 220                      # SheetSizeCombo's open list: at least this wide (the mockup's .sizepop)
+SIZE_ROW_H = 24                        # ... one sheet size row (18 px line + 3 + 3)
 # The mockup's weight 500 (field names, heading links, the add button, card buttons, the main chip). Edge draws it
 # with Segoe UI's Semibold face, and that is what the approved renders show; Qt's QFont.Weight.Medium finds no 500
 # face and draws Regular (the stage P1 screenshots, side by side), so the panel asks for DemiBold.
@@ -137,16 +154,43 @@ class Theme:
     amber_bg: QColor           # 0.3.6
     count_open_bg: QColor      # 0.3.6: the count chip on an open bar
     count_open_ink: QColor     # 0.3.6
+    field_ink: QColor          # 0.3.7 finish: text on a field (buttons, lists): ink, or with own_ink the palette's Text
+                               # when it reads better on the field
+    own_ink: bool = False      # 0.3.7 finish: ink is DARK_INK, not the palette's Text (too dark on the dark tokens)
 
 
 _THEMES: Dict[Tuple[str, ...], Theme] = {}
+# 0.3.7 finish (QGIS's Blend of Gray theme: its text #0e0e0e, its window #727272, dark enough for the dark tokens; and
+# Night Mapping's disabled text #535353): below these contrasts on the dark tokens' surfaces, the palette's colour
+# gives way to a fixed one
+MIN_INK_CONTRAST = 4.5                 # ink on the open body and the check card (WCAG's AA for text)
+MIN_DISABLED_CONTRAST = 2.5            # disabled text on the open band
+DARK_INK = "#e3e9ec"                   # the mockup's dark --ink
+DARK_DISABLED = "#777777"              # a dark palette's own disabled text (Qt's, the tests' night palette): 2.9:1
+
+
+def _luminance(c: QColor) -> float:
+    """WCAG's relative luminance of a colour (0 black to 1 white)."""
+    def lin(v: int) -> float:
+        v = v / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(c.red()) + 0.7152 * lin(c.green()) + 0.0722 * lin(c.blue())
+
+
+def contrast(a: QColor, b: QColor) -> float:
+    """WCAG's contrast ratio of two colours, 1 to 21 (alpha ignored)."""
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
 
 
 def theme_for(pal: QPalette) -> Theme:
     """The panel colors for a palette: the approved mockup's light tokens (navy bars) in a light theme; in a dark one
     (window lightness < 128) its dark tokens, fixed (0.3.6: QGIS Night Mapping's highlight is orange, which painted
     orange bars). In both, ink is the palette's Text, field its Base and disabled its disabled WindowText, so native
-    fields match."""
+    fields match; in a dark one (0.3.7 finish) ink is DARK_INK when the palette's Text is too dark on the open body or the
+    check card (own_ink: Blend of Gray; field_ink, the text on a field, stays the palette's Text when that reads
+    better on its Base: Blend of Gray's dialogs, their fields #b2b2b2), and disabled DARK_DISABLED when the palette's
+    is too dark on the open band."""
     cr = QPalette.ColorRole
     win, ink, base = pal.color(cr.Window), pal.color(cr.Text), pal.color(cr.Base)
     dis = pal.color(QPalette.ColorGroup.Disabled, cr.WindowText)
@@ -158,6 +202,14 @@ def theme_for(pal: QPalette) -> Theme:
     white = C("#ffffff")
     if win.lightness() < 128:
         bar = C("#2f5a6f")
+        open_body, row_open, pop = C("#172128"), C("#1c3341"), C("#1b272e")
+        text = ink
+        own_ink = min(contrast(ink, open_body), contrast(ink, pop)) < MIN_INK_CONTRAST
+        if own_ink:
+            ink = C(DARK_INK)
+        field_ink = ink if contrast(ink, base) > contrast(text, base) else text
+        if contrast(dis, row_open) < MIN_DISABLED_CONTRAST:
+            dis = C(DARK_DISABLED)
         t = Theme(dark=True, bar=bar, bar_hover=C("#386a82"), bar_disabled=_mix(bar, win, 0.55), on_bar=white,
                   heading=C("#a9c8d8"), ink=ink, muted=C("#93a5ae"), disabled=dis, rule=C("#2d3c45"), field=base,
                   field_line=C("#3a4a53"), chip=C("#26353d"), chip_ink=C("#c3d0d6"), chip_open=C(255, 255, 255, 41),
@@ -165,9 +217,10 @@ def theme_for(pal: QPalette) -> Theme:
                   hover=C(255, 255, 255, 22), chip_on=C("#2b4250"), panel2=C("#213039"), new=C("#6fcf9a"),
                   new_bg=C("#1d3a2b"), ink2=C("#b7c4ca"), chip_tile=C(25, 51, 64, 26), card_foot=C("#1a252c"),
                   ok=C("#4ade80"), tile=C("#233038"), tile_hover=C("#2b3a44"), tile_ink=C("#d3e1e8"),
-                  open_body=C("#172128"), row_rail=C("#5aa9cf"), row_open=C("#1c3341"), band_line=C("#3f6a80"),
-                  pop=C("#1b272e"), pop_line=C("#6b5326"), amber=C("#e8b45c"), amber_bg=C("#3a2e17"),
-                  count_open_bg=C(255, 214, 140, 56), count_open_ink=C("#ffe2a8"))
+                  open_body=open_body, row_rail=C("#5aa9cf"), row_open=row_open, band_line=C("#3f6a80"),
+                  pop=pop, pop_line=C("#6b5326"), amber=C("#e8b45c"), amber_bg=C("#3a2e17"),
+                  count_open_bg=C(255, 214, 140, 56), count_open_ink=C("#ffe2a8"), field_ink=field_ink,
+                  own_ink=own_ink)
     else:
         t = Theme(dark=False, bar=C("#193340"), bar_hover=C("#21414f"), bar_disabled=C("#9aa8b0"), on_bar=white,
                   heading=C("#193340"), ink=ink, muted=C("#5a6b74"), disabled=dis, rule=C("#d7dee2"), field=base,
@@ -178,7 +231,7 @@ def theme_for(pal: QPalette) -> Theme:
                   ok=C("#16a34a"), tile=C("#dbe3e8"), tile_hover=C("#cfd9df"), tile_ink=C("#193340"),
                   open_body=C("#ffffff"), row_rail=C("#3c86aa"), row_open=C("#e3eff5"), band_line=C("#8fb6ca"),
                   pop=C("#ffffff"), pop_line=C("#e7c98f"), amber=C("#b7791f"), amber_bg=C("#fbf1de"),
-                  count_open_bg=C(255, 214, 140, 56), count_open_ink=C("#ffe2a8"))
+                  count_open_bg=C(255, 214, 140, 56), count_open_ink=C("#ffe2a8"), field_ink=ink)
     _THEMES[key] = t
     return t
 
@@ -186,7 +239,8 @@ def theme_for(pal: QPalette) -> Theme:
 def _card_button_rules(t: Theme) -> str:
     """The check card's buttons (CheckCard; also in panel_stylesheet)."""
     return f"""
-QPushButton#xsCardButton {{ background: {css(t.field)}; color: {css(t.ink)}; border: 1px solid {css(t.field_line)};
+QPushButton#xsCardButton {{ background: {css(t.field)}; color: {css(t.field_ink)};
+    border: 1px solid {css(t.field_line)};
     border-radius: 4px; padding: 0px 10px; }}
 QPushButton#xsCardButton:hover {{ border-color: {css(t.link)}; }}
 QPushButton#xsCardPrimary {{ background: {css(t.bar)}; color: {css(t.on_bar)}; border: 1px solid {css(t.bar)};
@@ -195,22 +249,46 @@ QPushButton#xsCardPrimary:hover {{ background: {css(t.bar_hover)}; border-color:
 """
 
 
-def panel_stylesheet(t: Theme) -> str:
-    """The panel's stylesheet. Every rule names an objectName, so only the panel's own widgets change. (0.3.6: the
-    widgets painted in code (section bodies, layer cards, subsection headings) have no rule: a rule would fill them;
-    the dashed boxes (xsAdd, xsMoreBody) keep a transparent 1 px border here, their dashes painted in code.)"""
+def _size_list_rules(t: Theme) -> str:
+    """The Size list's box and foot line (_SizeList, its own stylesheet; also in panel_stylesheet)."""
     return f"""
+QFrame#xsSizeList {{ background: {css(t.field)}; border: 1px solid {css(t.field_line)}; }}
+QLabel#xsSizeFoot {{ color: {css(t.muted)}; background: palette(window); border-top: 1px solid {css(t.rule)};
+    padding: 6px 10px 7px 10px; }}
+"""
+
+
+def _own_ink_rules(t: Theme) -> str:
+    """With own_ink (0.3.7 finish, Blend of Gray: its stylesheet gives every QLabel, QCheckBox and QRadioButton its dark
+    text), the panel's plain ones take ink instead (and the disabled color, on no box); else nothing. (The dock's
+    only: in the dialogs they sit on QGIS's own window and fields, as dark as its text wants.)"""
+    if not t.own_ink:
+        return ""
+    return f"""
+QLabel, QCheckBox, QRadioButton {{ color: {css(t.ink)}; }}
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{ color: {css(t.disabled)}; background: transparent; }}
+"""
+
+
+def panel_stylesheet(t: Theme, plain_text: bool = False) -> str:
+    """The panel's stylesheet. Every rule names an objectName, so only the panel's own widgets change; `plain_text`
+    (0.3.7 finish, the dock): and _own_ink_rules. (0.3.6: the widgets painted in code (section bodies, layer cards,
+    subsection headings) have no rule: a rule would fill them; the dashed boxes (xsAdd, xsMoreBody) keep a transparent
+    1 px border here, their dashes painted in code. 0.3.7 finish: the :disabled rules of labels and links are on no box,
+    which an application stylesheet's QWidget:disabled background would paint: Night Mapping's #323232.)"""
+    return (_own_ink_rules(t) if plain_text else "") + f"""
 QLabel#xsFieldLabel {{ color: {css(t.muted)}; }}
-QLabel#xsFieldLabel:disabled {{ color: {css(t.disabled)}; }}
+QLabel#xsFieldLabel:disabled {{ color: {css(t.disabled)}; background: transparent; }}
 QLabel#xsReadout {{ color: {css(t.muted)}; border: none; border-top: 1px dashed {css(t.rule)}; padding-top: 4px; }}
 QLabel#xsNote {{ color: {css(t.muted)}; }}
 QLabel#xsMuted {{ color: {css(t.muted)}; }}
-QLabel#xsMuted:disabled {{ color: {css(t.disabled)}; }}
+QLabel#xsMuted:disabled {{ color: {css(t.disabled)}; background: transparent; }}
 QLabel#xsHint {{ color: {css(t.muted)}; }}
 QLabel#xsHint[warn="true"] {{ color: {css(t.warn)}; }}
 QLabel#xsHint[head="true"] {{ color: {css(t.link)}; }}
 QLabel#xsStatus {{ color: {css(t.ink)}; }}
-QToolButton#xsSegButton {{ background: {css(t.field)}; color: {css(t.ink)}; border: 1px solid {css(t.field_line)};
+QToolButton#xsSegButton {{ background: {css(t.field)}; color: {css(t.field_ink)};
+    border: 1px solid {css(t.field_line)};
     border-left-width: 0px; border-radius: 0px; padding: 0px 2px; }}
 QToolButton#xsSegButton[segpos="first"] {{ border-left-width: 1px; border-top-left-radius: 4px;
     border-bottom-left-radius: 4px; }}
@@ -221,23 +299,24 @@ QToolButton#xsSegButton:checked {{ background: {css(t.bar)}; color: {css(t.on_ba
 QToolButton#xsSegButton:disabled {{ color: {css(t.disabled)}; }}
 QToolButton#xsSegButton:checked:disabled {{ background: {css(t.bar_disabled)}; color: {css(t.field)};
     border-color: {css(t.bar_disabled)}; }}
-QToolButton#xsTool {{ background: {css(t.field)}; color: {css(t.ink)}; border: 1px solid {css(t.field_line)};
+QToolButton#xsTool {{ background: {css(t.field)}; color: {css(t.field_ink)}; border: 1px solid {css(t.field_line)};
     border-radius: 4px; padding: 1px 5px; }}
 QToolButton#xsTool:hover {{ border-color: {css(t.link)}; }}
 QToolButton#xsTool:checked {{ background: {css(t.chip_on)}; border-color: {css(t.link)}; }}
 QToolButton#xsTool:disabled {{ color: {css(t.disabled)}; }}
 QToolButton#xsTool::menu-indicator {{ image: none; width: 0px; }}
-QToolButton#xsRowMenu {{ background: {css(t.field)}; color: {css(t.ink)}; border: 1px solid {css(t.field_line)};
+QToolButton#xsRowMenu {{ background: {css(t.field)}; color: {css(t.field_ink)};
+    border: 1px solid {css(t.field_line)};
     border-radius: 3px; padding: 0px; }}
 QToolButton#xsRowMenu:hover {{ border-color: {css(t.link)}; }}
 QToolButton#xsRowMenu::menu-indicator {{ image: none; width: 0px; }}
 QToolButton#xsLink {{ background: transparent; color: {css(t.link)}; border: none; padding: 0px 1px; }}
 QToolButton#xsLink:hover {{ text-decoration: underline; }}
-QToolButton#xsLink:disabled {{ color: {css(t.disabled)}; }}
+QToolButton#xsLink:disabled {{ color: {css(t.disabled)}; background: transparent; }}
 QToolButton#xsAdd {{ background: transparent; color: {css(t.link)}; border: 1px solid transparent;
     border-radius: 4px; padding: 0px 6px; }}
 QToolButton#xsAdd:hover {{ border-color: {css(t.link)}; }}
-QToolButton#xsAdd:disabled {{ color: {css(t.disabled)}; }}
+QToolButton#xsAdd:disabled {{ color: {css(t.disabled)}; background: transparent; }}
 QPushButton#xsPrimary {{ background: {css(t.bar)}; color: {css(t.on_bar)}; border: none; border-radius: 4px;
     font-weight: 600; padding: 0px 10px; }}
 QPushButton#xsPrimary:hover {{ background: {css(t.bar_hover)}; }}
@@ -247,7 +326,9 @@ QFrame#xsSurfaceList {{ background: {css(t.field)}; border: 1px solid {css(t.fie
 QFrame#xsMoreBody {{ border: 1px solid transparent; border-radius: 4px; }}
 QFrame#xsStyleBox {{ background: {css(t.field)}; border: 1px solid {css(t.field_line)}; border-radius: 3px; }}
 QListView#xsSymbolList {{ background: {css(t.field)}; border: 1px solid {css(t.field_line)}; }}
-""" + _card_button_rules(t)
+QLabel#xsPopTitle {{ color: {css(t.ink)}; }}
+QLabel#xsPopCount {{ color: {css(t.muted)}; }}
+""" + _size_list_rules(t) + _card_button_rules(t)
 
 
 # ---------------------------------------------------------------- section icons (monochrome, the mockup's .sico)
@@ -991,8 +1072,8 @@ class SegmentedControl(QWidget):
         if isinstance(icon, str):
             t = theme_for(self.palette())
             q = QIcon()
-            for color, mode, state in ((t.ink, QIcon.Mode.Normal, QIcon.State.Off),
-                                       (t.ink, QIcon.Mode.Active, QIcon.State.Off),
+            for color, mode, state in ((t.field_ink, QIcon.Mode.Normal, QIcon.State.Off),
+                                       (t.field_ink, QIcon.Mode.Active, QIcon.State.Off),
                                        (t.on_bar, QIcon.Mode.Normal, QIcon.State.On),
                                        (t.on_bar, QIcon.Mode.Active, QIcon.State.On),
                                        (t.disabled, QIcon.Mode.Disabled, QIcon.State.Off),
@@ -1566,7 +1647,7 @@ class ElidedLabel(QWidget):
         elif not self.isEnabled():
             color = t.disabled
         else:
-            color = self.palette().color(QPalette.ColorRole.Text)
+            color = t.ink                  # (the palette's Text, but under own_ink)
         p.setFont(self.font())
         flags = int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         text = QFontMetrics(self.font()).elidedText(self._text, self._elide, self.width())
@@ -1815,7 +1896,7 @@ class StyleChips(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setFont(f)
-        ink = self.palette().color(QPalette.ColorRole.Text) if self.isEnabled() else t.disabled
+        ink = t.field_ink if self.isEnabled() else t.disabled
         for x, line, text, c in out:
             top = line * (lh + self.LINE_GAP)
             if c:
@@ -2015,8 +2096,8 @@ class _MoreBody(QFrame):
 
 
 class Disclosure(QWidget):
-    """Settings set once, folded under a round pill inside a section ("Units & datum", "Checks", "Distances &
-    printers"; folded when created); open, they show in a dashed box 5 px under the pill (0.3.6, D6)."""
+    """Settings set once, folded under a round pill inside a section ("Units & datum"; folded when created); open,
+    they show in a dashed box 5 px under the pill (0.3.6, D6)."""
 
     toggled = pyqtSignal(bool)
 
@@ -2394,6 +2475,7 @@ class CheckCard(QFrame):
         self._buttons: List[QPushButton] = []
         self._foot: Optional[QWidget] = None
         self._content: Optional[QWidget] = None
+        self._in_theme = False                        # setting its stylesheet (_apply_theme)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(1, 3, 1, 1)      # the border, the amber top edge
         self._lay.setSpacing(0)
@@ -2482,8 +2564,12 @@ class CheckCard(QFrame):
         lab.setFont(font)
         lab.setTextFormat(Qt.TextFormat.PlainText)
         lab.setWordWrap(wrap)
-        lab.setSizePolicy(QSizePolicy.Policy.Ignored if wrap else QSizePolicy.Policy.Preferred,
+        # (heightForWidth kept, as setWordWrap set it: a new policy drops it, and since the 0.3.7 fix no re-polish
+        # (_apply_theme) brings it back; without it the card is sized by sizeHint, and a long title is cut off)
+        pol = QSizePolicy(QSizePolicy.Policy.Ignored if wrap else QSizePolicy.Policy.Preferred,
                           QSizePolicy.Policy.Preferred if wrap else QSizePolicy.Policy.Fixed)
+        pol.setHeightForWidth(wrap)
+        lab.setSizePolicy(pol)
         return lab
 
     def _block_head(self, b: CardInfo, base: QFont, parent: QWidget) -> QWidget:
@@ -2535,17 +2621,29 @@ class CheckCard(QFrame):
 
     # ---- look
     def _apply_theme(self) -> None:
+        """The card's colours from its palette. Its stylesheet is set only when it changes (0.3.7 fix, with
+        changeEvent: under an application stylesheet, QGIS's Night Mapping and Blend of Gray themes, setStyleSheet
+        re-polishes the card and the polish sets its palette, a PaletteChange; 0.3.6 answered it here again and
+        recursed until the stack overflowed, building the panel)."""
         t = theme_for(self.palette())
         self._shadow.setColor(QColor(0, 0, 0, 102) if t.dark else QColor(16, 32, 40, 51))
         muted = css(t.muted)
-        self.setStyleSheet(f"""
+        sheet = f"""
 QLabel#xsCardTitle {{ color: {css(t.ink)}; }}
 QLabel#xsCardSource, QLabel#xsCardTerm, QLabel#xsCardSuffix, QLabel#xsCardNote, QLabel#xsCardMore {{ color: {muted}; }}
-""" + _card_button_rules(t))
+""" + _card_button_rules(t)
+        if sheet == self.styleSheet():
+            return
+        self._in_theme = True
+        try:
+            self.setStyleSheet(sheet)
+        finally:
+            self._in_theme = False
 
     def changeEvent(self, e) -> None:
         super().changeEvent(e)
-        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+        # (not the palette changes its own stylesheet brings, while _apply_theme sets it)
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange) and not self._in_theme:
             self._apply_theme()
 
     def paintEvent(self, _e) -> None:
@@ -2697,6 +2795,788 @@ def find_card_host(w: QWidget) -> CardHost:
     host = CardHost(top)
     top._xs_card_host = host
     return host
+
+
+# ---------------------------------------------------------------- option buttons and their popups (0.3.7, D1, D2)
+def _tab_focusable(w: QWidget) -> bool:
+    """`w` takes the focus with Tab (its policy has TabFocus) and is enabled and shown."""
+    return bool(w.focusPolicy().value & Qt.FocusPolicy.TabFocus.value) and w.isEnabled() and w.isVisible()
+
+
+def _within(w: Optional[QWidget], ancestor: QWidget) -> bool:
+    """`w` is `ancestor` or below it, following parentWidget() ACROSS windows (a combo box's drop-down list and a line
+    edit's context menu are windows whose parent chain leads back into the panel; QWidget.isAncestorOf stops at
+    windows)."""
+    x = w
+    while x is not None:
+        if x is ancestor:
+            return True
+        x = x.parentWidget()
+    return False
+
+
+def _flush_layouts(w: QWidget, sweeps: int = 3) -> None:
+    """Send the LayoutRequests posted to `w` and its descendants now, the deepest first (0.3.7 fix). A field that
+    restacks for a new width (a pair) asks its parents again one posted event per level, so a popup measured as it
+    shows, after a change made while it was hidden (the scroll bar, Verbose, the dock's width), is measured too short;
+    each sweep settles what the one before posted."""
+    for _ in range(sweeps):
+        for x in reversed([w] + w.findChildren(QWidget)):      # (children are listed after their parents)
+            QApplication.sendPostedEvents(x, QEvent.Type.LayoutRequest)
+
+
+class OptionButton(QAbstractButton):
+    """One option button of a section (0.3.7, D1): its title over a one-line muted summary of its settings (elided
+    "…"), a small chevron at the right; open (its popup showing): the band's fill and outline, a row_rail inner left
+    edge, the chevron up. A click toggles its popup (OptionGrid). (No button text: "Water & screens" would make a
+    mnemonic shortcut; the title is the accessible name.)"""
+
+    PAD = 9.0                          # the title and summary's left edge (the mockup's padding)
+    ROOM = 29.0                        # what they leave free of the width: the padding and the chevron's 20 px
+
+    def __init__(self, title: str, tip: str = "", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("xsOptionButton")
+        self._title = str(title)
+        self._tip = str(tip or "")
+        self._summary = ""
+        self._open = False
+        self._hover = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)       # (a mouse click does not take the focus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(OPT_H)
+        self._sync()
+
+    # ---- state
+    def title(self) -> str:
+        return self._title
+
+    def setSummary(self, text: str) -> None:
+        text = str(text or "")
+        if text != self._summary:
+            self._summary = text
+            self._sync()
+            self.update()
+
+    def summary(self) -> str:
+        return self._summary
+
+    def shownSummary(self) -> str:
+        """The summary as painted: elided to the width."""
+        return QFontMetrics(self._summary_font()).elidedText(self._summary, Qt.TextElideMode.ElideRight,
+                                                              int(max(0.0, self.width() - self.ROOM)))
+
+    def setTip(self, tip: str) -> None:
+        self._tip = str(tip or "")
+        self._sync()
+
+    def isOpen(self) -> bool:
+        return self._open
+
+    def setOpen(self, on: bool) -> None:
+        """Paint state only (OptionGrid calls it)."""
+        if bool(on) != self._open:
+            self._open = bool(on)
+            self.update()
+
+    def _sync(self) -> None:
+        self.setAccessibleName(self._title)
+        self.setAccessibleDescription(self._summary)
+        self.setToolTip("\n".join(x for x in (self._tip, self._summary) if x))   # the full summary, also elided
+
+    # ---- size
+    def _title_font(self) -> QFont:
+        return _px_font(self.font(), 11.5, QFont.Weight.DemiBold)
+
+    def _summary_font(self) -> QFont:
+        return _px_font(self.font(), 10.5)
+
+    def sizeHint(self) -> QSize:
+        return QSize(int(self.PAD) + QFontMetrics(self._title_font()).horizontalAdvance(self._title) + 20, OPT_H)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(60, OPT_H)
+
+    # ---- events
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):         # (Space: QAbstractButton's own)
+            self.click()
+            return
+        super().keyPressEvent(e)
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.FontChange:
+            self.updateGeometry()
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange, QEvent.Type.FontChange):
+            self.update()
+
+    def paintEvent(self, _e) -> None:
+        t = theme_for(self.palette())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = float(self.width()), float(self.height())
+        enabled = self.isEnabled()
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rad = OPT_RADIUS - 0.5
+        if self._open:
+            fill, line = t.row_open, t.band_line
+        else:
+            fill, line = t.field, (t.row_rail if self._hover and enabled else t.field_line)
+        p.setPen(QPen(line, 1.0))
+        p.setBrush(fill)
+        p.drawRoundedRect(r, rad, rad)
+        if self._open:                     # a 3 px rail-blue inner left edge (the mockup's inset shadow)
+            p.save()
+            p.setClipPath(_corner_path(QRectF(1.0, 1.0, w - 2.0, h - 2.0), 4, 4, 4, 4))
+            p.fillRect(QRectF(1.0, 1.0, 3.0, h - 2.0), t.row_rail)
+            p.restore()
+        room = max(0.0, w - self.ROOM)
+        flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        tf = self._title_font()
+        p.setFont(tf)
+        p.setPen(t.ink if enabled else t.disabled)
+        p.drawText(QRectF(self.PAD, 6.0, room, 14.0), flags,
+                   QFontMetrics(tf).elidedText(self._title, Qt.TextElideMode.ElideRight, int(room)))
+        if self._summary:
+            p.setFont(self._summary_font())
+            p.setPen(t.disabled if not enabled else (t.ink2 if self._open else t.muted))
+            p.drawText(QRectF(self.PAD, 22.0, room, 13.0), flags, self.shownSummary())
+        p.setPen(Qt.PenStyle.NoPen)        # the chevron: down (closed, muted), up (open, row_rail)
+        if self._open:
+            p.setBrush(t.row_rail)
+            tri = [QPointF(w - 17.0, 15.0), QPointF(w - 10.0, 15.0), QPointF(w - 13.5, 11.0)]
+        else:
+            p.setBrush(t.muted if enabled else t.disabled)
+            tri = [QPointF(w - 17.0, 11.0), QPointF(w - 10.0, 11.0), QPointF(w - 13.5, 15.0)]
+        p.drawPolygon(QPolygonF(tri))
+        if self.hasFocus():
+            p.setPen(QPen(t.ink, 1, Qt.PenStyle.DotLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r.adjusted(2.0, 2.0, -2.0, -2.0), rad - 2.0, rad - 2.0)
+        p.end()
+
+
+class _PopClose(QAbstractButton):
+    """An option popup's ✕ (0.3.7): 20 x 20, an 8 x 8 cross of two 1.3 px round-capped lines (no font glyph) in muted,
+    in ink over a rounded hover fill while hovered; Tab reaches it. A click asks the popup to close."""
+
+    SIZE = 20
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._hover = False
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setToolTip("Close (Esc)")
+        self.setAccessibleName("Close")
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.click()
+            return
+        super().keyPressEvent(e)
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, _e) -> None:
+        t = theme_for(self.palette())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect())
+        hot = self._hover and self.isEnabled()
+        if hot:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(t.hover)
+            p.drawRoundedRect(r, 3.0, 3.0)
+        pen = QPen(t.ink if hot else t.muted, 1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        c = r.center()
+        p.drawLine(QPointF(c.x() - 4.0, c.y() - 4.0), QPointF(c.x() + 4.0, c.y() + 4.0))
+        p.drawLine(QPointF(c.x() - 4.0, c.y() + 4.0), QPointF(c.x() + 4.0, c.y() - 4.0))
+        if self.hasFocus():
+            p.setPen(QPen(t.ink, 1, Qt.PenStyle.DotLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 3.0, 3.0)
+        p.end()
+
+
+class OptionPopup(QFrame):
+    """The popup of an option button (0.3.7, D2): a child of the panel's content (not a window), shown and placed by
+    its OptionGrid. Painted by hand: one band-coloured box (row_open, radius POP_RADIUS) with a 1 px band_line outline
+    and a notch rising NOTCH_H px over its top edge toward its button; a header (the title, optional widgets after it,
+    optional links at the right, a ✕), a 1 px field_line rule, then the body (body_layout). The strip beside the notch
+    stays transparent (WA_NoSystemBackground: a grab shows it so too); a press there belongs to the popup and does
+    nothing."""
+
+    closeRequested = pyqtSignal()                    # the ✕
+
+    def __init__(self, title: str, after_title: Sequence[QWidget] = (), links: Sequence[QWidget] = (),
+                 parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("xsOptionPopup")          # (no stylesheet rule: it paints itself)
+        self._title = str(title)
+        self._notch = 30.0                           # as asked (set_notch_x); notch_x() clamps it to the width
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(1, NOTCH_H + 1, 1, 1)
+        lay.setSpacing(0)
+        # the header: 8 + 20 + 7 px, 36 with its rule
+        self.header = QWidget(self)
+        self.header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        hl = QHBoxLayout(self.header)
+        hl.setContentsMargins(10, 8, 8, 7)
+        hl.setSpacing(8)
+        self.title_label = QLabel(self._title, self.header)
+        self.title_label.setObjectName("xsPopTitle")
+        self.title_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.title_label.setFont(_px_font(self.title_label.font(), 12.0, QFont.Weight.DemiBold))
+        hl.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        for w in after_title:                        # (the Plotted count)
+            w.setMaximumHeight(_PopClose.SIZE)
+            hl.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addStretch(1)
+        right = QHBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(2)
+        for w in links:                              # ("Show all")
+            w.setMaximumHeight(_PopClose.SIZE)
+            right.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.close_button = _PopClose(self.header)
+        right.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addLayout(right)
+        lay.addWidget(self.header)
+        lay.addWidget(_Rule(1, self, "field_line"))
+        # the body (the mockup's .opb; a caller may set other margins)
+        self.body = QWidget(self)
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(10, 9, 10, 11)
+        self.body_layout.setSpacing(8)
+        lay.addWidget(self.body)
+        self.close_button.clicked.connect(self.closeRequested.emit)
+        self.hide()
+
+    def title(self) -> str:
+        return self._title
+
+    def addWidget(self, w: QWidget) -> QWidget:
+        self.body_layout.addWidget(w)
+        return w
+
+    def notch_x(self) -> float:
+        """The notch's apex, px from the popup's left edge, kept clear of the rounded corners."""
+        lo = POP_RADIUS + NOTCH_HALF + 2.0
+        hi = self.width() - POP_RADIUS - NOTCH_HALF - 2.0
+        return max(lo, min(hi, self._notch))
+
+    def set_notch_x(self, x: float) -> None:
+        if float(x) != self._notch:
+            self._notch = float(x)
+            self.update()
+
+    def box_rect(self) -> QRect:
+        """The box under the notch (the shadow plate's place)."""
+        return self.rect().adjusted(0, NOTCH_H, 0, 0)
+
+    # (a press on the popup's own ground (its title, a field name, the strip beside the notch) stops here: passed on
+    # to the panel's content it would reach OptionGrid's filter as a press outside the popup. Wheel events go on, so
+    # the panel still scrolls under the pointer.)
+    def mousePressEvent(self, e) -> None:
+        e.accept()
+
+    def mouseReleaseEvent(self, e) -> None:
+        e.accept()
+
+    def mouseDoubleClickEvent(self, e) -> None:
+        e.accept()
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.update()
+
+    def paintEvent(self, _e) -> None:
+        t = theme_for(self.palette())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = float(self.width()), float(self.height())
+        cx = self.notch_x()
+        box = QPainterPath()
+        box.addRoundedRect(QRectF(0.5, NOTCH_H + 0.5, w - 1.0, h - NOTCH_H - 1.0), POP_RADIUS - 0.5, POP_RADIUS - 0.5)
+        tri = QPainterPath(QPointF(cx - NOTCH_HALF - 1.0, NOTCH_H + 1.5))     # (7 px half-width on the box's top
+        tri.lineTo(cx, 0.5)                                                  # edge; its base inside the box, so
+        tri.lineTo(cx + NOTCH_HALF + 1.0, NOTCH_H + 1.5)                     # the union has no top border under it)
+        tri.closeSubpath()
+        shape = box.united(tri).simplified()
+        p.fillPath(shape, t.row_open)
+        p.setPen(QPen(t.band_line, 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(shape)
+        p.end()
+
+
+class _ShadowPlate(QWidget):
+    """An option popup's soft shadow (0.3.7): a sibling exactly under its box, stacked just below it, painted in the
+    band colour (hidden by the popup above) and carrying the QGraphicsDropShadowEffect (the check card's blur, offset
+    and colours, re-read on a palette change). A plate, so that no graphics effect sits over the popup's own fields
+    (typing, a scrolling list, crisp text at 2x). A press on it goes to what is under it."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setBlurRadius(24)
+        self._shadow.setOffset(0, 6)
+        self.setGraphicsEffect(self._shadow)
+        self._apply_theme()
+        self.hide()
+
+    def shadow(self) -> QGraphicsDropShadowEffect:
+        return self._shadow
+
+    def _apply_theme(self) -> None:
+        self._shadow.setColor(QColor(0, 0, 0, 102) if theme_for(self.palette()).dark else QColor(16, 32, 40, 51))
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
+            self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillPath(_corner_path(QRectF(self.rect()), POP_RADIUS, POP_RADIUS, POP_RADIUS, POP_RADIUS),
+                   theme_for(self.palette()).row_open)
+        p.end()
+
+
+class _PressWatcher(QObject):
+    """OptionGrid's application event filter, installed only while one of its popups is open: it sees every event of
+    the application, so it tests the type first and passes the presses and Esc keys on."""
+
+    TYPES = frozenset((QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick, QEvent.Type.ShortcutOverride,
+                       QEvent.Type.KeyPress))
+
+    def __init__(self, grid: "OptionGrid"):
+        super().__init__(grid)
+        self._grid = grid
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() not in self.TYPES:
+            return False
+        try:
+            return self._grid._app_event(obj, ev)
+        except RuntimeError:               # (the panel is going)
+            return False
+
+
+class OptionGrid(QWidget):
+    """The option buttons of a section (0.3.7, D1, D2): two columns (one while a title would be cut), OPT_GAP apart,
+    and their popups, children of `overlay` (the dock's scroll content), one open at a time. A click on a button opens
+    its popup under it, as wide as the grid; it closes on a second click on that button, its ✕, Esc (the focus in the
+    overlay or on the scroll area around it), a press anywhere else but the panel's own scroll bar (an application
+    event filter, installed only while one is open), the grid being hidden (its section closing), and close_popup().
+    It never closes when the pointer leaves or the panel scrolls. While open it follows the grid (the dock resized,
+    rows opening above it, the panel scrolled: it is a child of the content) and its own height (a hint shown, the
+    list refilled)."""
+
+    popupToggled = pyqtSignal(int, bool)             # (index, open)
+
+    def __init__(self, overlay: QWidget, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("xsOptionGrid")
+        self._overlay = overlay
+        self._buttons: List[OptionButton] = []
+        self._popups: List[OptionPopup] = []
+        self._plates: List[_ShadowPlate] = []
+        self._current = -1
+        self._cols = 2
+        self._watched: List[QWidget] = []
+        self._presses = _PressWatcher(self)
+        self._filtering = False            # _presses is the application's event filter now
+        self._room_set = False             # this grid set the overlay's minimum height
+        self._placing = False
+        self._again = False
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(OPT_GAP)
+        self._grid.setVerticalSpacing(OPT_GAP)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+    # ---- options
+    def add_option(self, title: str, tip: str, after_title: Sequence[QWidget] = (),
+                   links: Sequence[QWidget] = ()) -> Tuple[OptionButton, OptionPopup]:
+        """A button and its popup (hidden; its shadow plate with it), in reading order."""
+        b = OptionButton(title, tip, self)
+        popup = OptionPopup(title, after_title, links, parent=self._overlay)
+        plate = _ShadowPlate(self._overlay)
+        self._buttons.append(b)
+        self._popups.append(popup)
+        self._plates.append(plate)
+        b.clicked.connect(lambda _checked=False, btn=b: self.toggle(btn))
+        popup.closeRequested.connect(self.close_popup)
+        self._arrange(self._cols, force=True)
+        self._reflow()
+        return b, popup
+
+    def buttons(self) -> List[OptionButton]:
+        return list(self._buttons)
+
+    def popups(self) -> List[OptionPopup]:
+        return list(self._popups)
+
+    def plates(self) -> List[QWidget]:
+        """The popups' shadow plates (tests)."""
+        return list(self._plates)
+
+    def columns(self) -> int:
+        """2, or 1 while the panel is too narrow for a title."""
+        return self._cols
+
+    def current(self) -> Optional[OptionPopup]:
+        return self._popups[self._current] if self._current >= 0 else None
+
+    def current_index(self) -> int:
+        """The open popup's index; -1: none open."""
+        return self._current
+
+    def filtering(self) -> bool:
+        """The application event filter is installed (only while a popup is open; tests)."""
+        return self._filtering
+
+    def _index(self, which: Any) -> int:
+        if isinstance(which, int):
+            return which if 0 <= which < len(self._buttons) else -1
+        for seq in (self._buttons, self._popups):
+            for i, x in enumerate(seq):
+                if x is which:
+                    return i
+        return -1
+
+    # ---- layout
+    def _arrange(self, n: int, force: bool = False) -> None:
+        if n == self._cols and not force:
+            return
+        self._cols = n
+        for b in self._buttons:
+            self._grid.removeWidget(b)
+        for i, b in enumerate(self._buttons):
+            self._grid.addWidget(b, i // n, i % n)
+        for c in range(2):
+            self._grid.setColumnStretch(c, 1 if c < n else 0)
+
+    def _reflow(self) -> None:
+        if not self._buttons or not self.isVisible():  # (a hidden grid has no width yet; its show checks again)
+            return
+        need = max(b.sizeHint().width() for b in self._buttons)
+        self._arrange(2 if (self.width() - OPT_GAP) / 2.0 >= need else 1)
+
+    # ---- open and close
+    def toggle(self, which: Any) -> None:
+        """`which`: an index, an OptionButton or an OptionPopup. The open one closes, another opens."""
+        i = self._index(which)
+        if i < 0:
+            return
+        if i == self._current:
+            self.close_popup()
+        else:
+            self.open_popup(i)
+
+    def open_popup(self, which: Any) -> bool:
+        """Open `which`'s popup (closing another open one first); False when the grid is not visible (nothing
+        opens)."""
+        i = self._index(which)
+        if i < 0 or not self.isVisible():
+            return False
+        if i == self._current:
+            return True
+        self.close_popup()
+        b, popup, plate = self._buttons[i], self._popups[i], self._plates[i]
+        keyboard = b.hasFocus()            # (reached with Tab: a mouse click never gives it the focus)
+        self._current = i
+        b.setOpen(True)
+        self._watch()
+        self._place()
+        plate.show()
+        plate.raise_()                     # (on every open: sections built after the popups are later siblings)
+        popup.show()
+        popup.raise_()
+        _flush_layouts(popup)              # (its fields restacked for this width: placed at its final height, so the
+        self._place()                      # dock scrolls the whole of it into view; shown: laid out for real)
+        QApplication.instance().installEventFilter(self._presses)
+        self._filtering = True
+        if keyboard:
+            target = self._first_focus(popup)
+            if target is not None:
+                target.setFocus(Qt.FocusReason.TabFocusReason)
+        self.popupToggled.emit(i, True)
+        return True
+
+    def close_popup(self) -> None:
+        """Close the open popup (idempotent): the focus, when it was inside, goes back to its button."""
+        i = self._current
+        if i < 0:
+            self._stop_filtering()
+            return
+        self._current = -1
+        b, popup, plate = self._buttons[i], self._popups[i], self._plates[i]
+        focus_in = False
+        try:
+            focus_in = _within(QApplication.focusWidget(), popup)
+            popup.hide()
+            plate.hide()
+            b.setOpen(False)
+        except RuntimeError:               # (the panel is going)
+            pass
+        self._unwatch()
+        self._stop_filtering()
+        self._give_room_back()
+        if focus_in:
+            try:
+                if b.isVisible():
+                    b.setFocus(Qt.FocusReason.OtherFocusReason)
+            except RuntimeError:
+                pass
+        self.popupToggled.emit(i, False)
+
+    def _stop_filtering(self) -> None:
+        if self._filtering:
+            self._filtering = False
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self._presses)
+
+    def _first_focus(self, popup: OptionPopup) -> Optional[QWidget]:
+        """The first widget of the popup Tab reaches, in focus chain order: in its body first (a field), else in its
+        header (Show all, the ✕)."""
+        found = None
+        x = popup.nextInFocusChain()
+        for _ in range(5000):
+            if x is None or x is popup:
+                break
+            if _tab_focusable(x) and popup.isAncestorOf(x):
+                if popup.body.isAncestorOf(x):
+                    return x
+                if found is None:
+                    found = x
+            x = x.nextInFocusChain()
+        return found
+
+    # ---- placing
+    def _to_overlay(self, w: QWidget, pt: QPoint) -> QPoint:
+        ov = self._overlay
+        if ov.isAncestorOf(w):
+            return w.mapTo(ov, pt)
+        return ov.mapFromGlobal(w.mapToGlobal(pt))
+
+    def _place(self) -> None:
+        """Put the open popup under its button, as wide as the grid, its plate under its box; room under it."""
+        if self._current < 0:
+            return
+        if self._placing:                  # (a geometry change while placing: once more when done)
+            self._again = True
+            return
+        self._placing = True
+        try:
+            for _ in range(4):
+                self._again = False
+                self._place_once()
+                if not self._again or self._current < 0:
+                    break
+        except RuntimeError:               # (the panel is going)
+            pass
+        finally:
+            self._placing = False
+
+    def _place_once(self) -> None:
+        b, popup, plate = self._buttons[self._current], self._popups[self._current], self._plates[self._current]
+        x = self._to_overlay(self, QPoint(0, 0)).x()
+        w = max(1, self.width())
+        y = self._to_overlay(b, QPoint(0, b.height())).y()           # the button's bottom edge: the notch's apex
+        popup.setFixedWidth(w)
+        popup.layout().activate()
+        h = popup.heightForWidth(w) if popup.hasHeightForWidth() else -1
+        if h <= 0:
+            h = max(popup.sizeHint().height(), popup.minimumSizeHint().height())
+        # (0.3.7 fix: with a word-wrapped text inside, its height for this width is what its layout gives the rows;
+        # its minimumSizeHint is not: a Fixed child's minimum is its sizeHint, a wrapped hint's height at another
+        # width, which left a band of empty room round the Plotted list's hint)
+        popup.setGeometry(x, y, w, h)
+        h = popup.height()
+        popup.set_notch_x(self._to_overlay(b, QPoint(b.width() // 2, 0)).x() - x)
+        plate.setGeometry(x, y + NOTCH_H, w, max(0, h - NOTCH_H))
+        self._make_room(y + h)
+
+    def _make_room(self, bottom: int) -> None:
+        """The overlay's minimum height: room for a popup that runs past the bottom of its layout (never below the
+        layout's own: an explicit minimum smaller than it would let the scroll area squeeze the content)."""
+        ov = self._overlay
+        need = bottom + POP_ROOM
+        lay = ov.layout()
+        natural = lay.sizeHint().height() if lay is not None else 0
+        if need > natural:
+            self._room_set = True
+            if ov.minimumHeight() != need:             # (only a change: the new minimum resizes the overlay,
+                ov.setMinimumHeight(need)              # which places the popup again)
+        else:
+            self._give_room_back()
+
+    def _give_room_back(self) -> None:
+        if self._room_set:
+            self._room_set = False
+            try:
+                if self._overlay.minimumHeight() != 0:
+                    self._overlay.setMinimumHeight(0)
+            except RuntimeError:
+                pass
+
+    # ---- watchers while open: the grid's ancestors below the overlay, the overlay, the popup
+    def _watch(self) -> None:
+        self._unwatch()
+        if self._current < 0:
+            return
+        out: List[QWidget] = []
+        x = self.parentWidget()
+        while x is not None and x is not self._overlay:
+            out.append(x)
+            x = x.parentWidget()
+        out += [self._overlay, self._popups[self._current]]
+        for w in out:
+            w.installEventFilter(self)
+        self._watched = out
+
+    def _unwatch(self) -> None:
+        for w in self._watched:
+            try:
+                w.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._watched = []
+
+    def eventFilter(self, obj, ev) -> bool:
+        cur = self._current
+        if cur < 0:
+            return False
+        et = ev.type()
+        if obj is self._popups[cur]:
+            if et == QEvent.Type.LayoutRequest:        # its height changed: a hint shown, the list refilled
+                self._place()
+        elif obj is self._overlay:
+            if et == QEvent.Type.Resize:
+                self._place()
+        elif et in (QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.LayoutRequest):
+            self._place()
+        elif et == QEvent.Type.Hide:                   # its section closing
+            self.close_popup()
+        elif et == QEvent.Type.ParentChange:
+            self._watch()
+        return False
+
+    def _app_event(self, obj, ev) -> bool:
+        """The application filter's events (_PressWatcher): a press outside the popup and its button closes it and
+        goes on (not one on the panel's own scroll bar: _scrolls_overlay); Esc closes it while the focus is the
+        panel's (_esc_is_ours) and no drop-down list or menu is open."""
+        if self._current < 0:
+            return False
+        et = ev.type()
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+            if isinstance(obj, QWidget) and not (_within(obj, self._popups[self._current])
+                                                 or _within(obj, self._buttons[self._current])
+                                                 or self._scrolls_overlay(obj)):
+                self.close_popup()
+            return False                               # (the press goes on: another button opens at once)
+        if ev.key() != Qt.Key.Key_Escape or ev.modifiers() != Qt.KeyboardModifier.NoModifier:
+            return False
+        if QApplication.activePopupWidget() is not None:       # (an open list or menu closes itself first)
+            return False
+        if not self._esc_is_ours(QApplication.focusWidget()):  # (Esc on the map cancels a map tool)
+            return False
+        if et == QEvent.Type.ShortcutOverride:
+            ev.accept()                                # no QGIS shortcut takes it
+        else:
+            self.close_popup()
+        return True
+
+    def _scrolls_overlay(self, w: QWidget) -> bool:
+        """`w` is a scroll bar of the scroll area holding the overlay (0.3.7 fix): pressing or dragging the panel's
+        own bar scrolls the open popup with the content, as the wheel does (it never closes on a scroll; the mockup's
+        does not either). Another scroll area's bar is a press elsewhere."""
+        if not isinstance(w, QScrollBar):
+            return False
+        x = w.parentWidget()                           # (a scroll area keeps its bars in a container of its own)
+        while x is not None:
+            if isinstance(x, QAbstractScrollArea):
+                return x.isAncestorOf(self._overlay)
+            if x.isWindow():
+                break
+            x = x.parentWidget()
+        return False
+
+    def _esc_is_ours(self, fw: Optional[QWidget]) -> bool:
+        """The focus is in the overlay (the popup included), or on the panel around it: a mouse click on an option
+        button (TabFocus) gives Qt's click focus to the scroll area holding the content. Never elsewhere in its window
+        (the map canvas)."""
+        if fw is None:
+            return False
+        return _within(fw, self._overlay) or (not fw.isWindow() and fw.isAncestorOf(self._overlay))
+
+    # ---- events
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._reflow()
+        if self._current >= 0:
+            self._place()
+
+    def moveEvent(self, e) -> None:
+        super().moveEvent(e)
+        if self._current >= 0:
+            self._place()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self._reflow()
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        self.close_popup()
+
+    def event(self, e) -> bool:
+        et = e.type()
+        out = super().event(e)
+        if self._current >= 0:
+            if et == QEvent.Type.ParentChange:
+                self._watch()
+            elif et == QEvent.Type.LayoutRequest:
+                self._place()
+        return out
 
 
 # ---------------------------------------------------------------- layer cards and the Flare join (0.3.6, D4, D5)
@@ -3419,9 +4299,370 @@ class SurfaceRow(LayerCard):
         self.changed.emit()
 
 
+# ---------------------------------------------------------------- drop-downs (0.3.7, D8 and its amendment)
+class ElidedComboBox(QComboBox):
+    """A drop-down whose closed box ends its text with "…" when it is too narrow (0.3.7, D8; Fusion clips it), whose
+    tooltip is the current item's ToolTipRole data or else its full text (or a lead tip of its own, setLeadTip), and
+    whose list is wide enough for its items."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._lead = ""                    # setLeadTip: a tooltip of its own instead of the item's text
+        self.currentIndexChanged.connect(self.syncTip)
+
+    def fullText(self) -> str:
+        """The text to paint before eliding (SheetSizeCombo: its own)."""
+        return self.currentText()
+
+    def setLeadTip(self, tip: str) -> None:
+        """A tooltip of its own (0.3.7 fix: Tops from keeps its 0.3.6 tooltip): shown alone while the box shows its
+        text whole, with the full text under it while the box shows it cut (the 260 px dock)."""
+        self._lead = str(tip or "")
+        self.syncTip()
+
+    def _option(self) -> QStyleOptionComboBox:
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        return opt
+
+    def _room(self, opt: QStyleOptionComboBox) -> int:
+        """The width the style gives the label (CE_ComboBoxLabel: the edit field less 1 px each side, less the
+        icon)."""
+        r = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, opt, QStyle.SubControl.SC_ComboBoxEditField,
+                                        self)
+        room = r.width() - 2
+        if not opt.currentIcon.isNull():
+            room -= self.iconSize().width() + 4
+        return max(0, room)
+
+    def displayText(self) -> str:
+        """The text as painted now (fullText() elided to the room)."""
+        return self.fontMetrics().elidedText(self.fullText(), Qt.TextElideMode.ElideRight, self._room(self._option()))
+
+    def syncTip(self, *_args) -> None:
+        """The tooltip again (also after setItemData(..., ToolTipRole)); with a lead tip, it and, while the shown box
+        cuts the text, the full text."""
+        if self._lead:
+            cut = self.isVisible() and self.displayText() != self.fullText()
+            self.setToolTip(f"{self._lead}\n{self.fullText()}" if cut else self._lead)
+            return
+        i = self.currentIndex()
+        tip = self.itemData(i, Qt.ItemDataRole.ToolTipRole) if i >= 0 else None
+        self.setToolTip(str(tip) if tip else self.currentText())
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        if self._lead:                     # (cut or whole: the width decides)
+            self.syncTip()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if self._lead:
+            self.syncTip()
+
+    def paintEvent(self, _e) -> None:
+        # (QComboBox's own paintEvent with the label's text elided)
+        p = QStylePainter(self)
+        p.setPen(self.palette().color(QPalette.ColorRole.Text))
+        opt = self._option()
+        p.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, opt)
+        text = self.fullText()
+        if not text and self.currentIndex() < 0 and self.placeholderText():
+            opt.palette.setBrush(QPalette.ColorRole.ButtonText, opt.palette.placeholderText())
+            text = self.placeholderText()
+        opt.currentText = self.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, self._room(opt))
+        p.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, opt)
+        p.end()
+
+    def showPopup(self) -> None:
+        v = self.view()
+        v.setMinimumWidth(min(360, max(self.width(), v.sizeHintForColumn(0) + 2 * v.frameWidth() + 20)))
+        super().showPopup()
+
+
+class _SizeRow(QWidget):
+    """One row of the Size list (0.3.7): its check box (the name), a stretch and the muted detail ("8.5 × 11 in"),
+    SIZE_ROW_H high; the theme's hover fill while hovered; a click anywhere on the row toggles the box (the mockup's
+    label)."""
+
+    def __init__(self, key: str, name: str, detail: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.key = str(key)
+        self._hover = False
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(SIZE_ROW_H)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 3, 10, 3)
+        lay.setSpacing(7)
+        self.box = QCheckBox(str(name), self)
+        self.box.setFont(_px_font(self.box.font(), 11.5))
+        self.detail = QLabel(str(detail), self)
+        self.detail.setObjectName("xsMuted")
+        self.detail.setFont(_px_font(self.detail.font(), 10.5))
+        lay.addWidget(self.box, 0)
+        lay.addStretch(1)
+        lay.addWidget(self.detail, 0)
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            e.accept()                     # (the release toggles the box)
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            e.accept()
+            self.box.click()               # (his click: the box's clicked)
+            return
+        super().mouseReleaseEvent(e)
+
+    def paintEvent(self, _e) -> None:
+        if self._hover and self.isEnabled():
+            p = QPainter(self)
+            p.fillRect(self.rect(), theme_for(self.palette()).hover)
+            p.end()
+
+
+class _SizeList(QFrame):
+    """SheetSizeCombo's open list (0.3.7, the mockup's round-8 .sizepop): a Popup window of its own whose parent is
+    the combo (the panel's stylesheet reaches it; WA_WindowPropagation: its palette and font too). Inside it one frame,
+    `box` (QFrame#xsSizeList: the stylesheet's field background and field_line border; a stylesheet gives a window no
+    background or border of its own, its child frame it does), holding a _SizeRow per sheet size, a rule, the custom
+    row and the muted foot line. Qt closes it as any popup (a press outside it, Esc); a press on the combo itself
+    closes it without the press being replayed to the combo, which would open it again (WA_NoMouseReplay, as Qt's own
+    combo list does). 0.3.7 finish: the box and foot rules are also its own stylesheet (_apply_theme): under an
+    application stylesheet (Night Mapping, Blend of Gray) the panel's alone gave the foot no padding and the box no
+    border inset, its text edge to edge."""
+
+    def __init__(self, combo: QComboBox, sizes: Sequence[Tuple[str, str, str]], custom: Tuple[str, str, str],
+                 foot: str):
+        super().__init__(combo, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("xsSizeListPopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_WindowPropagation, True)
+        self._combo = combo
+        self._in_theme = False                        # setting its stylesheet (_apply_theme)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.box = QFrame(self)
+        self.box.setObjectName("xsSizeList")
+        outer.addWidget(self.box)
+        lay = QVBoxLayout(self.box)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(0)
+        self.rows: List[_SizeRow] = []
+        for key, name, detail in sizes:
+            row = _SizeRow(key, name, detail, self.box)
+            lay.addWidget(row)
+            self.rows.append(row)
+        self.rule_box = QWidget(self.box)
+        rl = QVBoxLayout(self.rule_box)
+        rl.setContentsMargins(8, 4, 8, 4)
+        rl.setSpacing(0)
+        rl.addWidget(_Rule(1, self.rule_box, "rule"))
+        lay.addWidget(self.rule_box)
+        self.custom_row = _SizeRow(custom[0], custom[1], custom[2], self.box)
+        lay.addWidget(self.custom_row)
+        lay.addSpacing(4)
+        self.foot = QLabel(str(foot), self.box)
+        self.foot.setObjectName("xsSizeFoot")
+        self.foot.setTextFormat(Qt.TextFormat.PlainText)
+        self.foot.setWordWrap(True)
+        self.foot.setFont(_px_font(self.foot.font(), 10.5))
+        self.foot.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self.foot)
+        self.foot.setVisible(bool(foot))
+
+    def popup(self) -> None:
+        """Show it under the combo (above it when the screen has no room below; with room on neither side, on the
+        side with more, kept on the screen), at least SIZE_LIST_W wide, the focus on the first box."""
+        combo = self._combo
+        w = max(SIZE_LIST_W, combo.width())
+        self._apply_theme()
+        self.ensurePolished()              # (the foot's stylesheet padding counts in its height)
+        self.setFixedWidth(w)
+        self.layout().activate()
+        h = self.heightForWidth(w) if self.hasHeightForWidth() else self.sizeHint().height()
+        h = max(h, self.minimumSizeHint().height())
+        self.setFixedHeight(h)
+        avail = self._available()
+        pt = combo.mapToGlobal(QPoint(0, combo.height() + 2))
+        y = pt.y()
+        if y + h > avail.bottom() + 1:                 # no room below: above it when the screen has room there
+            above = combo.mapToGlobal(QPoint(0, -h - 2)).y()
+            if above >= avail.top():
+                y = above
+            else:
+                # neither (a short screen; 0.3.7 fix): the side with more room, moved up or down to stay on the
+                # screen (its top kept on it when the screen is shorter than the list)
+                top = combo.mapToGlobal(QPoint(0, 0)).y()
+                if top - avail.top() > avail.bottom() + 1 - (top + combo.height()):
+                    y = above
+                y = max(avail.top(), min(y, avail.bottom() + 1 - h))
+        x = max(avail.left(), min(pt.x(), avail.right() + 1 - w))
+        self.move(x, y)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay, False)
+        self.show()
+        if self.rows:
+            self.rows[0].box.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def _available(self) -> QRect:
+        """The screen's room for the list, around the combo (tests stand in a short screen)."""
+        screen = self._combo.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry() if screen is not None else QRect(0, 0, 100000, 100000)
+
+    def _apply_theme(self) -> None:
+        """Its own stylesheet, _size_list_rules in its palette's colours: set when it changes (as CheckCard's)."""
+        sheet = _size_list_rules(theme_for(self.palette()))
+        if sheet == self.styleSheet():
+            return
+        self._in_theme = True
+        try:
+            self.setStyleSheet(sheet)
+        finally:
+            self._in_theme = False
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        # (open: its colours follow the palette; not the palette changes its own stylesheet brings)
+        if e.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange) and not self._in_theme \
+                and self.isVisible():
+            self._apply_theme()
+
+    def mousePressEvent(self, e) -> None:
+        # (QWidget's own closes a popup on a press outside it; a press on the combo is not replayed to it)
+        combo = self._combo
+        on_combo = (not self.rect().contains(e.position().toPoint())
+                    and QRect(combo.mapToGlobal(QPoint(0, 0)), combo.size()).contains(e.globalPosition().toPoint()))
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay, on_combo)
+        super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):         # (Esc: QWidget's own, for a popup)
+            self.close()
+            return
+        super().keyPressEvent(e)
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self._combo.update()               # (the arrow's open state)
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        self._combo.update()
+
+
+class SheetSizeCombo(ElidedComboBox):
+    """Scale & sheet › Size (0.3.7, the amendment of D8): a drop-down whose list has a check box per sheet size, a
+    rule, an exclusive "custom" item and a muted foot line; the list stays open while he checks (a press outside it,
+    Esc, or a press on the box again closes it). The closed box paints fullText() (elided), its tooltip is the second
+    text of `describe`. It holds no items of its own (count() 0): the list is its own window (_SizeList)."""
+
+    checksChanged = pyqtSignal()                     # his change (a box clicked), or setChecks(..., emit=True)
+
+    def __init__(self, sizes: Sequence[Tuple[str, str, str]], custom: Tuple[str, str, str], foot: str,
+                 describe: Callable[[List[str], bool], Tuple[str, str]], parent: Optional[QWidget] = None):
+        # sizes / custom: (key, name, detail), e.g. ("letter", "Letter", "8.5 × 11 in"), ("custom", "Custom", "cut to
+        # the drawing"); describe(checked keys, custom) -> (closed text, tooltip)
+        super().__init__(parent)
+        self.setObjectName("xsSheetSize")
+        self._describe = describe
+        self._keys = [str(k) for k, _name, _detail in sizes]
+        self._custom = str(custom[0])
+        self._list = _SizeList(self, sizes, custom, foot)
+        self._boxes: Dict[str, QCheckBox] = {}
+        for row in self._list.rows + [self._list.custom_row]:
+            self._boxes[row.key] = row.box
+            row.box.clicked.connect(lambda _checked=False, k=row.key: self._on_clicked(k))
+        _narrow(self)
+        self._sync()
+
+    # ---- the checks
+    def checked(self) -> List[str]:
+        """The checked size keys, in list order ([] while custom)."""
+        return [k for k in self._keys if self._boxes[k].isChecked()]
+
+    def isCustom(self) -> bool:
+        return self._boxes[self._custom].isChecked()
+
+    def setChecks(self, keys: Iterable[str], custom: bool = False, emit: bool = False) -> None:
+        """Check exactly `keys` (unknown keys ignored), or custom alone (custom wins); silent unless `emit`."""
+        want = set() if custom else {str(k) for k in keys}
+        for k in self._keys:
+            self._set_box(k, k in want)
+        self._set_box(self._custom, bool(custom))
+        self._sync()
+        if emit:
+            self.checksChanged.emit()
+
+    def _set_box(self, key: str, on: bool) -> None:
+        b = self._boxes[key]
+        if b.isChecked() != bool(on):
+            was = b.blockSignals(True)
+            b.setChecked(bool(on))
+            b.blockSignals(was)
+
+    def _on_clicked(self, key: str) -> None:
+        if self._boxes[key].isChecked():               # custom clears the sizes, a size clears custom
+            if key == self._custom:
+                for k in self._keys:
+                    self._set_box(k, False)
+            else:
+                self._set_box(self._custom, False)
+        self._sync()                                   # (unchecking the last leaves none: describe says what then)
+        self.checksChanged.emit()
+
+    def _sync(self) -> None:
+        self.syncTip()
+        self.setAccessibleDescription(self.fullText())
+        self.update()
+
+    # ---- the closed box
+    def fullText(self) -> str:
+        return self._describe(self.checked(), self.isCustom())[0]
+
+    def syncTip(self, *_args) -> None:
+        self.setToolTip(wrap_tip(self._describe(self.checked(), self.isCustom())[1]))
+
+    def _option(self) -> QStyleOptionComboBox:
+        opt = super()._option()
+        if self._list.isVisible():
+            opt.state |= QStyle.StateFlag.State_On
+        return opt
+
+    # ---- the list (tests read boxes and list_frame)
+    def boxes(self) -> Dict[str, QCheckBox]:
+        """Key -> its check box, the custom key included."""
+        return dict(self._boxes)
+
+    def list_frame(self) -> QFrame:
+        """The open list (hidden while closed)."""
+        return self._list
+
+    def showPopup(self) -> None:
+        # (no super(): its own list, not the item view; QComboBox's click, Space, F4 and Alt+Down call this)
+        self._list.popup()
+
+    def hidePopup(self) -> None:
+        self._list.hide()
+
+
 # ---------------------------------------------------------------- small helpers (moved from ui.dock in 0.3.3)
-def _combo(items: Sequence[Tuple[str, Any]], parent=None) -> QComboBox:
-    c = QComboBox(parent)
+def _combo(items: Sequence[Tuple[str, Any]], parent=None, elide: bool = False) -> QComboBox:
+    """A drop-down of (text, data) items that shrinks with the dock; `elide` (0.3.7): an ElidedComboBox."""
+    c = ElidedComboBox(parent) if elide else QComboBox(parent)
     for text, data in items:
         c.addItem(text, data)
     _narrow(c)
@@ -3508,6 +4749,34 @@ def _note(text: str) -> QLabel:
 
 def _esc(text: str) -> str:
     return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+# a long tooltip (0.3.7 finish): Qt shows a plain-text one on one line (it wraps one only at the screen's width), and
+# wraps a rich-text one, unless its width is set, at about a third of its length (120 to 160 px here)
+TIP_W = 240                            # px: the width a long tooltip wraps at (the mockup's tip box: 220)
+TIP_MAX = 320                          # px: a tooltip whose longest line is wider than this (QToolTip's font) wraps
+_TIP_HEAD = f'<table width="{TIP_W}" cellspacing="0" cellpadding="0"><tr><td>'
+_TIP_TAIL = "</td></tr></table>"
+
+
+def wrap_tip(text: str) -> str:
+    """`text` as a tooltip (0.3.7 finish, the panel's 0.3.7 ones): as it is when its longest line fits in TIP_MAX px
+    of QToolTip's font, else rich text that Qt wraps at TIP_W px (one cell of a table that wide; its lines kept).
+    tip_text() gives the text back."""
+    text = str(text or "")
+    fm = QFontMetrics(QToolTip.font())
+    if text.lstrip().startswith("<") or max(fm.horizontalAdvance(line) for line in text.split("\n")) <= TIP_MAX:
+        return text
+    return _TIP_HEAD + _esc(text).replace("\n", "<br>") + _TIP_TAIL
+
+
+def tip_text(tip: str) -> str:
+    """A tooltip's text: wrap_tip's undone (tests compare it)."""
+    tip = str(tip or "")
+    if not (tip.startswith(_TIP_HEAD) and tip.endswith(_TIP_TAIL)):
+        return tip
+    inner = tip[len(_TIP_HEAD):len(tip) - len(_TIP_TAIL)].replace("<br>", "\n")
+    return inner.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
 def _cbox(text: str, tip: str = "", strong: bool = False) -> QCheckBox:

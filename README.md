@@ -34,12 +34,13 @@ and exports sheets you can measure with an engineer's scale and draw on by hand.
   of the section that runs through it.
 - **Exact-scale PDF, PNG or SVG** with **separate horizontal and vertical scales**
   (for example 1 in = 100 ft H, 1 in = 10 ft V), a **major and minor grid** (green, gray or your own colours,
-  widths and line styles) and graphic scales. Nothing is ever shrunk to fit.
-- **Letter and Tabloid tiling:** a long section is split across sheets with match lines. Sheets are
-  landscape or portrait as fits best, or all one way if you choose.
-- A tidy panel (six sections, problems shown on the layer they concern, hints and readouts when you want them),
-  highlights on the map, and a **preview** you can zoom and read by hovering, with the elevation of every
-  surface under the mouse; the surfaces export to CSV.
+  widths and line styles, or no major or no minor lines at all) and graphic scales. Nothing is ever shrunk to fit.
+- **Sheet sizes and tiling:** check the sheet sizes your printers take (Letter and Tabloid to begin with) and each
+  section goes on the smallest that fits; a long section is split across sheets of the largest size checked, with
+  match lines. Sheets are landscape or portrait as fits best, or all one way if you choose.
+- A tidy panel (six sections, option buttons that show their settings at a glance, problems shown on the layer they
+  concern, hints and readouts when you want them), highlights on the map, and a **preview** you can zoom and read
+  by hovering, with the elevation of every surface under the mouse; the surfaces export to CSV.
 
 ### Requirements
 
@@ -80,24 +81,32 @@ The **XSections** button (a small ground profile with red ticks) is on the **Plu
 5. **Explorations:** one row per point layer (see *Several exploration layers* below). A new project gets
    a row for each layer named like explorations, with its fields guessed from the field names (an amber
    **check** badge on the row asks you to check them); click a row to open it, check its label and type fields
-   and tick the types to show, and **+ Add layer** for another. Set the tolerance (*Within*, ft), which every
-   layer shares. **Plotted** lists what is on the section; untick one to leave it off.
-6. **Depths** (in Explorations): the *Depth line* from top to bottom is on by default. The **Top elevation**,
-   **Bottom elevation** and **Total depth** fields are on each layer's **Depths** tab (guessed from the field
-   names; leave any of them empty if your table does not have it). Tick *TD label* to label the total depth
-   (TD 50′).
-7. **Water & screens** (in Explorations, optional): *Draw them* turns screens and water levels on or off, *Print
-   beside* sets the label beside the symbol; their fields are on each layer's **Water** tab (see below).
+   and tick the types to show, and **+ Add layer** for another. Under the rows, *Options* has four buttons, each
+   showing its settings in a line of small print (for example *150 ft · vertical · name only*); click one to open
+   its options (see *The panel*). **All layers** has the tolerance (*Within*, ft), which every layer shares, and
+   the labels. **Plotted** lists what is on the section; untick one to leave it off.
+6. **Depths** (Explorations › Options): the *Depth line* from top to bottom is on by default. The **Top
+   elevation**, **Bottom elevation** and **Total depth** fields are on each layer's **Depths** tab (guessed from
+   the field names; leave any of them empty if your table does not have it). Tick *TD label* to label the total
+   depth (TD 50′).
+7. **Water & screens** (Explorations › Options, optional): *Draw them* turns screens and water levels on or off,
+   *Print beside* sets the label beside the symbol; their fields are on each layer's **Water** tab (see below).
 8. **Other features** (optional): **+ Add layer** for seeps or springs (points), creeks (lines) or a site
    (areas) (see below).
-9. **Scale & sheet:** set *Horizontal 1 in = … ft* and *Vertical 1 in = … ft*, choose the *Size* of the sheet and
-   its **Orientation**: *Auto* (the default, as before 0.3.5) takes each sheet landscape when the section fits,
-   else portrait; *Landscape* or *Portrait* puts every sheet that way, tiled sheets too (a long section then
-   tiles on portrait sheets). A custom page size is sized to the drawing, so Orientation is off for it. When
-   nothing fits, the message names the orientation and says when *Auto* or the other one would do. Then click
-   **Export…** and choose PDF, PNG or SVG. *Sheet style* sets the grid (Green, Gray or your own colours, widths
-   and line styles, and its spacing), the depth line widths, printer edge, grid fill, and whether bends get a
-   dashed line (see *More room to draw*).
+9. **Scale & sheet:** set *Horizontal 1 in = … ft* and *Vertical 1 in = … ft*, and under them *Distances*: *Feet*
+   (1,250) or *Stations* (12+50). Under *Elevations*, *Auto* picks the range from your data, with *Room below
+   lowest* and *Fill sheet* beside each other (see *More room to draw*); *Manual* shows *Lowest* and *Highest*
+   instead. Under *Sheet*, **Size** and *Format* share a row. Open *Size* and **check the sheet sizes you can
+   print**: several checked, each sheet is the smallest of them that fits (a long section tiles on the largest);
+   one checked, just that sheet; none, Letter. The line at the bottom of the list says so. *Custom* (below the
+   sizes, on its own) cuts the page to the drawing. The closed box reads *Letter or Tabloid* (the default),
+   *Tabloid*, *Smallest of 3 sizes* or *Custom*. Then the **Orientation**: *Auto* (the default, as before 0.3.5)
+   takes each sheet landscape when the section fits, else portrait; *Landscape* or *Portrait* puts every sheet that
+   way, tiled sheets too (a long section then tiles on portrait sheets). A custom page is sized to the drawing, so
+   Orientation and Fill sheet are off for it. When nothing fits, the message names the orientation and says when
+   *Auto* or the other one would do. Then click **Export…** and choose PDF, PNG or SVG. *Sheet style* sets the
+   grid (Green, Gray or your own colours, widths and line styles, and its spacing), the depth line widths, the
+   printer edge, and whether bends get a dashed line (see *More room to draw*).
    **⋯** next to Export has *Export points CSV…*, *Save line to layer* and **Verbose** (see *The panel*).
 
 Settings are saved in the QGIS project; your own layers are only read, never edited. Projects saved
@@ -107,10 +116,12 @@ the same fields, types and table of water levels, and looks exactly as before). 
 lines: By type* (0.3.3 and earlier) opens with those layers in *Color*, so their lines take the colours of
 the layer's own QGIS style instead of the plugin's type colours; a 0.3.3 layer drawn in a colour you picked
 is in *Color* from its layer style too. A project from 0.3.5 opens with its Other points rows as point rows of
-*Other features*, drawn as before.
+*Other features*, drawn as before. A project from 0.3.6 or earlier opens with the same sheets: *Smallest that fits*
+over the sheets your printers take shows those sizes checked (Letter and Tabloid by default), a fixed sheet shows
+that size alone, and a custom page shows *Custom*.
 **Save line to layer** puts a drawn line in a temporary layer: right-click it > *Make Permanent* to keep it.
 
-### More room to draw (Sheet style)
+### More room to draw (Scale & sheet, Sheet style)
 
 The scales fix the size of the drawing: the plot is always exactly (length ÷ horizontal scale) ×
 (elevation range ÷ vertical scale). These options decide how much of the paper around it is left free, and
@@ -118,7 +129,7 @@ whether the grid grows to use it.
 
 **The defaults (since 0.1.2):** the **compact layout** with the **grid filled below the section**, a **0.5 in**
 printer edge and the **notes on**. Projects saved with 0.1.1 keep the layout they had; projects from 0.1.0 get
-the new defaults. Change any of them here.
+the new defaults. The fill is under *Scale & sheet › Elevations* (since 0.3.7), the rest under *Sheet style*.
 
 - **Compact layout (more room to draw)**, on by default: the title on one line, the end letters (A (S),
   A′ (N)) just above the frame, two short note lines (5.5 to 6 pt) beside the horizontal scale bar, and the
@@ -135,18 +146,37 @@ the new defaults. Change any of them here.
   letter or number is cut off at the edge, use 0.5 in.
 - **Notes**, on by default: untick to leave the notes under the section off (the grid, graphic scales, axis
   labels and title stay). In the standard layout this frees about 1 in at the bottom.
-- **Fill sheet** (under *Grid*): *Below* the section (the default), *Both* above and below (the larger half
-  below, where the geology goes) or *Off*: adds whole major grid intervals (1 in with the default grid) to use the
-  sheet height, keeping *Below lowest* (in paper inches) of grid under the lowest point. The first three options
-  only make room; this one turns it into grid. Not used with a custom page size, or when *Elevations* is *Manual*:
-  the sheet then shows the range you typed (rounded to the major grid).
+- **Fill sheet** and **Room below lowest** (under *Scale & sheet › Elevations*, shown only with *Auto*; before
+  0.3.7 under *Sheet style › Grid*, where Room below lowest was *Below lowest*): *Below* the section (the default),
+  *Both* above and below (the larger half below, where the geology goes) or *Off*; *Room below lowest* is the grid
+  kept under the lowest point, in paper inches. The first three options only make room; Fill sheet turns it into
+  grid. Hover a button for what it does.
 
-Sheet style also sets how the grid and the depth lines look:
+**Fill sheet, explained.** With *Elevations* on *Auto*, XSections picks the elevation range from your data: from
+the highest point down to the lowest bottom (or TD label), plus *Room below lowest* of grid under it (1.00 in of
+paper, which is 50 ft at 1 in = 50 ft). Then it takes the smallest sheet that fits, which usually leaves paper over.
+Fill sheet decides what happens to it:
+
+- *Off* leaves the extra paper blank under the frame.
+- *Below* (the default) adds whole 1-inch grid squares under the section, down to the margin: room to draw the
+  geology deeper.
+- *Both* adds them above and below, the larger half below.
+
+Fill sheet only adds whole major squares, so the grid always ends on a major line. It does nothing with *Manual*
+elevations (the sheet shows the range you typed, rounded to the major grid) or with a custom page size (the page is
+cut to the drawing).
+
+Sheet style sets how the grid and the depth lines look:
 
 - **Grid:** *Green* (the default engineering pad: major lines 0.7 pt, minor 0.35 pt, solid), *Gray* (for
   black-and-white printers, the same widths) or *Custom*, your own **color**, **width** (0.1 to 3 pt) and
-  **line** (solid, dashed or dotted) for the major and the minor lines. Under Green or Gray a line shows the
-  preset's colours and widths. The first time you choose Custom it starts from the grid you had; *Start from
+  **line** (solid, dashed, dotted or **None**) for the major and the minor lines. *None* leaves that set of lines
+  off the sheet, the preview and every export, and grays out its colour and width: with the major lines None the
+  minor lines run evenly across the whole frame (no gap at each inch); with both None there is no grid, and the
+  frame, ticks and axis numbers stay. The notes name only the lines drawn. (XSections 0.3.6 draws a None line
+  solid.) A line under the Look buttons sums it up: under Green or Gray the preset's colours and widths, under
+  Custom the line styles (*Major: dashed · Minor: none*). The first time you choose Custom it starts from the grid
+  you had; *Start from
   Green · Gray* starts it again from a preset. Clicking Green goes back to the default at once, and Custom
   keeps your settings for when you come back. Dashes are the same length at every width: dashed 4 pt on,
   2 pt off; dotted 0.6 pt dots 1.6 pt apart, with round ends (a dotted line 1.6 pt or wider reads as solid).
@@ -158,16 +188,16 @@ Sheet style also sets how the grid and the depth lines look:
   default, 0.25 to 3 pt) and *Color* (1.6 pt by default, so pale colours still show; 0.25 to 4 pt), in steps
   of 0.05 pt; **Reset** goes back to 0.75 and 1.6 pt. The bars at the bottom and the top follow the line,
   and the legend's swatches are drawn at the same widths. Which layers are black, gray or in color is set
-  for each layer, under *Explorations > Drawn in*. (With *Depth line* off, under *Explorations > Depths*, the
-  widths are disabled.)
+  for each layer, under *Explorations > Drawn in*. (With *Depth line* off, under *Explorations › Options ›
+  Depths*, the widths are disabled.)
 
 ### The panel
 
-Six sections follow the drawing from the top down: **Line**, **Surfaces**, **Explorations** (its parts *Layers*,
-*All layers*, *Depths*, *Water & screens* and *Plotted*), **Other features**, **Scale & sheet** and **Sheet
-style**. They are all closed when the panel opens; each header shows what is set (for example *A–A′ · 1,534 ft*,
-or *2 of 3 on · 46 plotted*) or, in amber, what is still missing (*Choose a DEM*, *Layer missing*). Open as many
-as you like.
+Six sections follow the drawing from the top down: **Line**, **Surfaces**, **Explorations** (its parts *Layers*
+and *Options*), **Other features**, **Scale & sheet** (*Scale*, *Elevations*, *Sheet*) and **Sheet style**
+(*Grid*, *Depth lines*, *Page*). They are all closed when the panel opens; each header shows what is set (for
+example *A–A′ · 1,534 ft*, or *2 of 3 on · 46 plotted*) or, in amber, what is still missing (*Choose a DEM*,
+*Layer missing*). Open as many as you like.
 
 - **What opens looks different from what it pushes down.** A closed section is a solid tile; an open one is a navy
   bar over a framed body with a navy edge on its left. Inside, each part has a heading in navy capitals with a
@@ -176,8 +206,16 @@ as you like.
   row joins its section: it becomes one light band reaching the section's left edge, which turns light blue
   beside it and curves into it. The tick box beside a row leaves the layer off without losing its settings; its
   **⋯** button moves it up or down or removes it.
-- Settings you rarely change fold under round buttons (*Units & datum*, *Checks*, *Distances & printers*) that open
-  a dashed box.
+- **Option buttons** (Explorations › Options): *All layers* (Within, Labels, Label text), *Depths* (Depth line, TD
+  label, Tops from, 0 means missing and the 25 ft check against LIDAR), *Water & screens* (Draw them, Print beside)
+  and *Plotted* (the list of explorations on the section). Each shows its settings in a line of small print (*line ·
+  TD · table, else LIDAR*, *drawn · elevation beside*, *15 of 16 · 1 off*) that follows every change; its tooltip
+  says what it holds. A click opens its options in a box under it, over the sections below, pointing at the button.
+  One is open at a time. It closes on a second click on its button, its **✕**, **Esc**, or a click anywhere else
+  (that click still does its job, so a click on another button opens that one); never when the pointer leaves it,
+  so you can type in it. It scrolls with the panel; scrolling, with the wheel or the panel's scroll bar, keeps it
+  open, and one opened near the bottom of the panel scrolls into view. Closing its section closes it too.
+- Settings you rarely change (*Units & datum*, under Surfaces) fold under a round button that opens a dashed box.
 - **Verbose** (the last item of the **⋯** menu next to Export, off by default) shows the hints and notes under the
   controls: what a choice does, the readouts (length, where tops came from, what is plotted, the sheet). With it
   off the panel shows only the controls; every explanation is in the tooltip of its control. XSections remembers
@@ -248,9 +286,10 @@ project). Choosing a field yourself in a guessed box takes it off the list too.
   drawn, also for a well drawn without a line down there (*SW-1: water level below the frame*). The legend
   and the notes list only the levels and screens that are drawn.
 
-Shared by every layer (*All layers*, *Depths* and *Water & screens* under Explorations): the *Within* distance,
-*Labels* and *Label text*, the top rule (*Tops from* and, under *Checks*, its 25 ft check), *0 means missing*,
-*TD label*, screens and water levels on or off (*Draw them*), and the water-level label (*Print beside*). Dates
+Shared by every layer (the *All layers*, *Depths* and *Water & screens* buttons under Explorations › Options): the
+*Within* distance, *Labels* and *Label text*, the top rule (*Tops from* and its 25 ft check, *Ignore a table top off
+LIDAR by over*), *0 means missing*, *TD label*, screens and water levels on or off (*Draw them*), and the
+water-level label (*Print beside*). Dates
 stored as numbers (milliseconds since 1970, as some GeoPackages keep them) are shown as dates.
 With *Label text* set to *Name + offset and direction*, each exploration (and each other point) is labelled
 with how far and which way it was projected onto the section line: a well 40 ft north of an east-west line reads
@@ -264,8 +303,11 @@ moved or offline).
 ### Plotted explorations
 
 Everything the rows choose is plotted, even two explorations of different layers a foot apart.
-**Plotted**, the last part of Explorations, lists them by layer, in order along the line, each with its distance
-and offset (*300 ft · 40 ft L*); its heading's tooltip says how many (*N of M, K left off by you*). **Untick one to leave it off this
+**Plotted** (the last button under Explorations › Options; its small print reads *15 of 16 · 1 off*) opens a
+checklist of them by layer (each layer's name in small capitals), in order along the line, each with its distance,
+offset and the direction it was projected (*300 ft · 40 ft L · S*). Its header says how many are shown (*15 of
+16*; the tooltip adds how many you left off) and has **Show all**. A long list scrolls (about 250 px tall), and it
+stays where you scrolled while the section is rebuilt after each tick. **Untick one to leave it off this
 section:** the sheet, the points CSV and the map highlights leave it out. What you leave off is saved with
 the project for that section line (another line has its own; *Reverse* and *Save line to layer* keep it;
 so does removing a layer, of explorations or of section lines, and adding it again under the same name),
@@ -331,7 +373,7 @@ the map with the explorations, and the preview's hover reads them. None of them 
 whose layer is gone is left out and its row says so (amber), as a missing surface is; the section is still
 drawn.
 
-### The preview: hover, zoom and Surfaces CSV
+### The preview: hover, zoom, full screen and Surfaces CSV
 
 The preview at the bottom of the window shows the whole section as it will print (not to scale on screen).
 
@@ -362,6 +404,15 @@ The preview at the bottom of the window shows the whole section as it will print
   map x, y.
 - The **Readout row** and **Popup** buttons turn each one on or off; both start on and XSections remembers
   your choice. With both off there is no hover guide or map dot.
+- **Full screen** (the last button on the preview's toolbar) lifts the preview out of its dock, fills the screen
+  it is on with it (with two monitors, the screen the preview is on, not always the main one) and fits the section
+  to it. The toolbar, the readout strip, the popup, the hover and the zoom all keep working. Click the button
+  again, or press **Esc**, to put the preview back exactly where it was: docked at its old size, or floating where
+  it was. If you close or hide the preview while it is full screen (Alt+F4, or the XSections button), it goes back
+  into its dock and shows there next time. Closing the project, quitting QGIS or unloading the plugin also puts it
+  back first. F11 is still QGIS's own full screen. QGIS's *Toggle Panels Visibility* (Ctrl+Tab) leaves the
+  full-screen preview alone, because it hides only docked panels, so it hides the panels behind it. Nothing is
+  saved: the preview never starts full screen.
 
 ### Other surfaces
 
@@ -403,8 +454,8 @@ Elevations are converted from the model's LENGTH_UNITS.
 
 ### Screens and water levels
 
-**Explorations > Water & screens** turns screens and water levels on or off (*Draw them*) and sets the label
-beside the symbol (*Print beside*). The fields are chosen for each layer, on its row's **Water** tab:
+**Explorations › Options › Water & screens** turns screens and water levels on or off (*Draw them*) and sets the
+label beside the symbol (*Print beside*). The fields are chosen for each layer, on its row's **Water** tab:
 
 - **Screen top** and **Screen bottom** fields, as **depths** below the exploration's top (the same top the
   depth line uses) or as **elevations** (*Screens are*). The screen is drawn as a bracket just left of the
@@ -478,8 +529,10 @@ The PDF asks viewers to print at actual size, but always check the print dialog:
 | Chrome or Edge | More settings > Scale: **Default** (or *Actual size*), never a *Fit* option |
 | Firefox | Scale: **100%** (not *Fit to page width*) |
 
-Use paper of the sheet's size (Letter 8.5 × 11 or Tabloid 11 × 17). Then **check the print with your
-engineer's scale on the grid**: with the default grid, major lines are exactly 1 inch apart.
+Use paper of the sheet's size (Letter 8.5 × 11 or Tabloid 11 × 17, or the larger size you checked under *Scale &
+sheet › Size*: check only the sizes you can print, and the section goes on the smallest of them that fits). Then
+**check the print with your engineer's scale on the grid**: with the default grid, major lines are exactly 1 inch
+apart.
 
 ### Update and uninstall
 

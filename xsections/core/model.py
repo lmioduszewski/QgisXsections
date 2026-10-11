@@ -71,7 +71,8 @@ ORIENTATIONS = ("auto", "landscape", "portrait")
 
 # --- sheet style: the grid and the depth line widths (0.3.4, DESIGN.md decision 23)
 GRID_CHOICES = ("green", "gray", "custom")
-GRID_STYLES = SURFACE_STYLES                     # ("solid", "dash", "dot")
+GRID_STYLES = SURFACE_STYLES + ("none",)         # 0.3.7: "none" leaves that set of grid lines out (the grid only:
+                                                 # surfaces keep SURFACE_STYLES)
 GRID_PRESETS = {"green": (("#5f9a72", 0.7, "solid"), ("#a8c8b2", 0.35, "solid")),     # (major, minor):
                 "gray": (("#6e6e6e", 0.7, "solid"), ("#b4b4b4", 0.35, "solid"))}      #  (colour, pt, style)
 GRID_W_MIN, GRID_W_MAX = 0.1, 3.0                # Custom grid widths, pt
@@ -296,8 +297,9 @@ def clean_sheet_style(data: dict) -> None:
     """In place, the sheet-style keys of stored settings: an unknown grid_color is dropped (the default, Green, then
     applies); a grid colour that is not "#rrggbb" is dropped, else lower-cased; a width that is not a finite number
     (or is a bool) is dropped, else clamped (grid 0.1-3, depth_lw_black 0.25-3, depth_lw_color 0.25-4); an unknown
-    grid style is dropped; grid_custom_used must be a bool. The page orientation (0.3.5) is cleaned too: an unknown
-    one is "auto" (clean_orientation). Keys that are absent stay absent."""
+    grid style is dropped ("none" is a style of its own since 0.3.7: kept); grid_custom_used must be a bool. The page
+    orientation (0.3.5) is cleaned too: an unknown one is "auto" (clean_orientation). Keys that are absent stay
+    absent."""
     if "orientation" in data:
         data["orientation"] = clean_orientation(data["orientation"])
     if "grid_color" in data and data["grid_color"] not in GRID_CHOICES:
@@ -328,7 +330,8 @@ def clean_sheet_style(data: dict) -> None:
 def grid_spec(s: Any) -> Tuple[Tuple[str, float, str], Tuple[str, float, str]]:
     """((major colour, width pt, style), (minor ...)) the sheet and the preview draw: a preset's, or (custom) the
     grid_major_* / grid_minor_* keys, cleaned (bad colour -> the Green one, width clamped to GRID_W_MIN..MAX, unknown
-    style -> solid); an unknown grid_color -> Green."""
+    style -> solid; "none" is a style of its own since 0.3.7, kept: that set is not drawn); an unknown grid_color ->
+    Green. The presets never hold "none"."""
     choice = getattr(s, "grid_color", "green")
     if choice != "custom":
         return GRID_PRESETS.get(choice, GRID_PRESETS["green"]) if isinstance(choice, str) else GRID_PRESETS["green"]
@@ -341,6 +344,12 @@ def grid_spec(s: Any) -> Tuple[Tuple[str, float, str], Tuple[str, float, str]]:
                     width0 if width is None else min(max(width, GRID_W_MIN), GRID_W_MAX),
                     style if style in GRID_STYLES else "solid"))
     return out[0], out[1]
+
+
+def grid_drawn(s: Any) -> Tuple[bool, bool]:
+    """(major lines drawn, minor lines drawn): False for a set whose style (grid_spec) is "none" (0.3.7)."""
+    major, minor = grid_spec(s)
+    return major[2] != "none", minor[2] != "none"
 
 
 def depth_widths(s: Any) -> Tuple[float, float]:
@@ -471,10 +480,10 @@ class Settings:
     # Custom grid (grid_spec): always stored, even under a preset (the remembered Custom values)
     grid_major_color: str = GRID_PRESETS["green"][0][0]
     grid_major_width: float = GRID_PRESETS["green"][0][1]     # pt, GRID_W_MIN..GRID_W_MAX
-    grid_major_style: str = GRID_PRESETS["green"][0][2]       # solid | dash | dot (GRID_STYLES)
+    grid_major_style: str = GRID_PRESETS["green"][0][2]       # solid | dash | dot | none (GRID_STYLES; 0.3.7: none)
     grid_minor_color: str = GRID_PRESETS["green"][1][0]
     grid_minor_width: float = GRID_PRESETS["green"][1][1]
-    grid_minor_style: str = GRID_PRESETS["green"][1][2]
+    grid_minor_style: str = GRID_PRESETS["green"][1][2]       # solid | dash | dot | none (GRID_STYLES; 0.3.7: none)
     grid_custom_used: bool = False     # Custom chosen once in this project (later ones keep his values)
     depth_lw_black: float = DEPTH_LW_BLACK   # pt, 0.25-3: Black and Gray depth lines (depth_widths)
     depth_lw_color: float = DEPTH_LW_COLOR   # pt, 0.25-4: Color depth lines
@@ -545,6 +554,8 @@ def migrate_settings(data: dict) -> dict:
     them takes their defaults (a point row, as before): no version step. It also adds `guessed` to the exploration
     rows (the fields guessed from their names, not checked yet); a stored row without it loads with none (no "check"
     badge), and 0.3.5 opening a 0.3.6 project drops it.
+
+    0.3.7 adds the value "none" to grid_major_style / grid_minor_style; no step: 0.3.6 reads it as solid.
 
     Whatever the version, the stored sheet-style keys (the grid choice, the Custom grid's colours, widths and line
     styles, the depth line widths) are cleaned first (clean_sheet_style): a bad value is dropped (its default then

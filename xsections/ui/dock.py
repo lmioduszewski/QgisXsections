@@ -4,16 +4,19 @@ Flow: any change -> 300 ms timer -> refresh(): settings() -> core.build.build_se
 render.scales.plan -> preview.draw / readouts / row problems / header chips / map feedback. A SectionError shows in
 the status line at the bottom of the panel, never as a traceback dialog.
 
-Layout (0.3.6, DESIGN.md decision 27, the approved panel mockup): six sections, Line, Surfaces, Explorations (its
-subsections Layers, All layers, Depths, Water & screens, Plotted), Other features (Layers), Scale & sheet (Scale,
-Elevations, Sheet) and Sheet style (Grid, Depth lines, Page), all closed whenever the panel opens or a project is
-loaded; several may be open at once. A closed section is a solid tile, an open one the navy bar over a framed body
-on a navy rail; each header carries a summary chip (amber when something is missing) and an amber count of the
-layers that need a look. Subsections have navy capital headings; field names sit above their fields in plain
-sentence case, two fields to a row; short choices are segmented buttons; set-once settings fold under round pills
-(Units & datum, Checks, Distances & printers). The layer rows of Surfaces, Explorations and Other features are cards;
-an open one joins its section's rail (widgets.LayerCard, the "Flare"). Explanations under the controls (hints) and
-the readouts show only with Verbose (the ⋯ menu; per user, widgets.verbose). A real problem of a row (ui.problems:
+Layout (0.3.6, DESIGN.md decision 27, the approved panel mockup; 0.3.7, decision 28): six sections, Line, Surfaces,
+Explorations (its subsections Layers and Options: four option buttons, All layers, Depths, Water & screens and
+Plotted, each showing a one-line summary of its settings and opening a popup that holds them; one popup open at a
+time, closed by a second click, its ✕, Esc or a click anywhere else: widgets.OptionGrid), Other features (Layers),
+Scale & sheet (Scale with Distances; Elevations with Room below lowest | Fill sheet under Auto, Lowest | Highest under
+Manual; Sheet: Size (a check box per sheet size, and Custom) | Format) and Sheet style (Grid, Depth lines, Page), all
+closed whenever the panel opens or a project is loaded; several may be open at once. A closed section is a solid tile,
+an open one the navy bar over a framed body on a navy rail; each header carries a summary chip (amber when something
+is missing) and an amber count of the layers that need a look. Subsections have navy capital headings; field names
+sit above their fields in plain sentence case, two fields to a row; short choices are segmented buttons; set-once
+settings fold under a round pill (Units & datum). The layer rows of Surfaces, Explorations and Other features are
+cards; an open one joins its section's rail (widgets.LayerCard, the "Flare"). Explanations under the controls (hints)
+and the readouts show only with Verbose (the ⋯ menu; per user, widgets.verbose). A real problem of a row (ui.problems:
 values left out, a layer gone ...) is one amber line in the row with a count badge and a check card; a guess shows
 only its "check" badge; what no row owns is the status line's (a warning amber, an error red; else "Ready · ...").
 
@@ -21,17 +24,18 @@ Point layers (0.3.3, DESIGN.md decision 22): Explorations is a list of point-lay
 own explorations, explorations by others, supply wells...), each with its own layer, fields, types, water fields,
 look and "Include in the elevation range"; the rules (within, labels, tops, TD, screens) stay shared. Other features
 (0.3.6: seeps and springs as points, creeks as lines, a site as polygons; Other points before) are rows of their own
-(OtherPointsRow). "Plotted" lists everything the rows choose on the section; what he unticks there is left off this
-section line (self._hidden, Settings.hidden_points, keyed by the line, the layer id and the feature id). Rows made
-from guesses (a fresh project, layers added later) are never saved by themselves.
+(OtherPointsRow). The Plotted popup (Explorations › Options) lists everything the rows choose on the section; what he
+unticks there is left off this section line (self._hidden, Settings.hidden_points, keyed by the line, the layer id and
+the feature id). Rows made from guesses (a fresh project, layers added later) are never saved by themselves.
 
 Surfaces: the ground row (GroundRow), then one row per other surface: a raster (widgets.SurfaceRow) or a MODFLOW 6
 model surface (mf6_dialog.ModelSurfaceRow, added with "+ MODFLOW 6…", mf6_dialog.MF6Dialog).
 
 Sheet style (0.3.4, DESIGN.md decision 23): the grid (Green | Gray | Custom: the major and minor lines' colour, width
-and line style; the first Custom starts from the preset in use, later ones keep his values, saved with the project
-only) and the depth line widths (Black & gray, Color; Reset). An exploration row drawn in Color follows its layer's
-QGIS style: the layer's styleChanged re-reads the style box and rebuilds the section (nothing is saved).
+and line style, 0.3.7: or None, that set of lines left out; the first Custom starts from the preset in use, later ones
+keep his values, saved with the project only) and the depth line widths (Black & gray, Color; Reset). An exploration
+row drawn in Color follows its layer's QGIS style: the layer's styleChanged re-reads the style box and rebuilds the
+section (nothing is saved).
 
 Hover (0.3.1): the preview's hover moves a marker along the section line on the map (preview.hoverChanged /
 hoverLeft -> MapFeedback.show_cursor / hide_cursor), and the map cursor near the line moves the preview's guide
@@ -56,13 +60,13 @@ from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsCo
                        QgsFeatureRequest, QgsField, QgsGeometry, QgsMessageLog,
                        QgsPalLayerSettings, QgsPointXY, QgsProject, QgsRasterLayer, QgsUnitTypes,
                        QgsVectorLayer, QgsVectorLayerSimpleLabeling)
-from qgis.gui import (QgsAdvancedDigitizingDockWidget, QgsCheckableComboBox, QgsColorButton, QgsDockWidget,
-                      QgsMapLayerComboBox, QgsMessageBarItem, QgsRasterBandComboBox,
-                      QgsScrollArea)
-from qgis.PyQt.QtCore import QEvent, QLocale, QMetaType, QSize, Qt, QTimer, QUrl
-from qgis.PyQt.QtGui import QColor, QDesktopServices, QDoubleValidator, QFont, QPainter
-from qgis.PyQt.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                                 QMenu, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget)
+from qgis.gui import (QgsAdvancedDigitizingDockWidget, QgsColorButton, QgsDockWidget, QgsMapLayerComboBox,
+                      QgsMessageBarItem, QgsRasterBandComboBox, QgsScrollArea)
+from qgis.PyQt.QtCore import QEvent, QLocale, QMetaType, QPoint, QSize, Qt, QTimer, QUrl
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QDoubleValidator, QFont, QPainter, QPalette
+from qgis.PyQt.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGraphicsOpacityEffect, QGridLayout,
+                                 QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy, QStyle,
+                                 QStyleOptionToolButton, QStylePainter, QToolButton, QVBoxLayout, QWidget)
 
 from ..core.explorations import not_number_text
 from ..core.hover import hover_lines
@@ -90,10 +94,11 @@ from .point_rows import (ExplorationRow, FitCheckBox, OtherPointsRow, PlottedLis
                          table_layer)
 from .surfaces_csv_dialog import SurfacesCsvDialog
 from .widgets import (CONTROL_H, LINE_STYLE_ICON_SIZE, LINE_STYLE_ICONS, BarSwatch, CardHost,  # noqa: F401
-                      ClickableArea, CollapsibleSection, Disclosure, ElidedLabel, Hint, LayerCard, Readout, StatusDot,
-                      Subsection, SurfaceRow, _cbox, _combo, _esc, _field_combo, _narrow, _note, _numeric_field_combo,
-                      _px_font, _segmented, _set_combo_data, _spin, add_button, check_row, checkbox_grid, field_box,
-                      field_label, hrow, link_button, link_cards, pair, panel_stylesheet, theme_for)
+                      ClickableArea, CollapsibleSection, Disclosure, ElidedLabel, Hint, LayerCard, OptionGrid,
+                      OptionPopup, Readout, SheetSizeCombo, StatusDot, SurfaceRow, _cbox, _combo, _esc,
+                      _field_combo, _narrow, _note, _numeric_field_combo, _px_font, _segmented, _set_combo_data,
+                      _spin, add_button, check_row, checkbox_grid, field_box, field_label, hrow, link_button,
+                      link_cards, pair, panel_stylesheet, theme_for, wrap_tip)
 
 LOG_TAG = "XSections"
 DRAWN = "__drawn__"                      # feature-combo data for a line drawn on the map
@@ -109,12 +114,17 @@ LINE_HINTS = ("section", "xsec", "x-sec", "profile", "transect")
 MAX_GUESSED_ROWS = 6                    # a fresh project gets at most this many exploration rows
 LIST_MAX = 6                            # labels named in a readout line before "+N"
 
-SHEET_CHOICES = [("Smallest that fits", "smallest"), ("Letter 11 × 8.5 in", "letter"),
-                 ("Tabloid 17 × 11 in", "tabloid"), ("ANSI C 22 × 17 in", "ansic"), ("ARCH C 24 × 18 in", "archc"),
-                 ("ANSI D 34 × 22 in", "ansid"), ("ARCH D 36 × 24 in", "archd"), ("Custom (roll plotter)", "custom")]
 SHEET_KEYS = ["letter", "tabloid", "ansic", "archc", "ansid", "archd"]
 SHEET_SHORT = {"letter": "Letter", "tabloid": "Tabloid", "ansic": "ANSI C", "archc": "ARCH C", "ansid": "ANSI D",
                "archd": "ARCH D"}
+# Scale & sheet › Size (0.3.7, the amendment of D8: no Printers take; a check box per sheet size, the approved
+# mockup's round 8): several checked, the smallest that fits among them; one, just that sheet; none, Letter; or Custom
+SIZE_DETAIL = {"letter": "8.5 × 11 in", "tabloid": "11 × 17 in", "ansic": "17 × 22 in", "archc": "18 × 24 in",
+               "ansid": "22 × 34 in", "archd": "24 × 36 in"}
+SIZE_ITEMS = [(k, SHEET_SHORT[k], SIZE_DETAIL[k]) for k in SHEET_KEYS]
+SIZE_CUSTOM = ("custom", "Custom", "cut to the drawing")
+SIZE_FOOT = "Several: the smallest that fits · One: just that · None: Letter"
+SIZE_TIP = "Check several: the smallest that fits. One: just that sheet. None: Letter."     # the field's label
 # page orientation (0.3.5, his request): Auto is the search of every earlier version
 ORIENT_CHOICES = [("Auto", "auto"), ("Landscape", "landscape"), ("Portrait", "portrait")]
 ORIENT_TIPS = ["As fits best: landscape first, then portrait (as before)", "Every sheet landscape",
@@ -124,7 +134,19 @@ EDGE_CHOICES = [("0.5 in", 0.5), ("0.3 in", 0.3)]
 EDGE_TIPS = ["Any printer", "Most laser printers (they print to within 0.25 in; check yours)"]
 EDGE_VALUES = [v for _, v in EDGE_CHOICES]
 FILL_CHOICES = [("Off", "off"), ("Below", "below"), ("Both", "both")]
-FILL_TIPS = ["No extra grid", "Whole major intervals below the section", "Above and below (the larger half below)"]
+# Scale & sheet › Elevations under Auto (0.3.7, D6: moved from Sheet style › Grid; their tooltips explain them)
+FILL_TIPS = ["Off: leave the paper left over on the sheet blank.",
+             "Below (the default): fill the paper left over with whole grid squares under the section, down to the "
+             "margin. Room to draw the geology deeper.",
+             "Both: fill it with grid squares above and below the section, the larger half below."]
+FILL_TIP = "What to do with the paper left over on the sheet"
+FILL_CUSTOM_TIP = "Not used with a custom page size: the page is cut to the drawing"
+ROOM_TIP = "Grid kept under the lowest point (the lowest bottom or TD label), in paper inches"
+Z_AUTO_HINT = ("Auto picks the range from your data plus the room below. Fill sheet turns the paper left over into "
+               "whole grid squares.")
+# Scale & sheet › Scale (0.3.7, D7: moved from the "Distances & printers" pill)
+DISTANCES_TIP = "How distances along the line are written: 1,250 ft, or as stations 12+50"
+DISTANCE_TIPS = ["Distances in feet: 1,250", "Distances as stations: 12+50"]
 FORMAT_CHOICES = [("PDF (vector)", ("pdf", 300)), ("PNG, 300 dpi", ("png", 300)), ("PNG, 600 dpi", ("png", 600)),
                   ("SVG", ("svg", 300))]
 EXPORT_FILTERS = {"pdf": "PDF (*.pdf)", "png": "PNG image (*.png)", "svg": "SVG drawing (*.svg)"}
@@ -133,11 +155,14 @@ COMPASS16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW",
 # the six sections' chip keys (chip_texts), in panel order
 SECTION_KEYS = ("line", "surfaces", "explorations", "other", "scale", "style")
 # the Sheet style keys of its chip ("Defaults" when all are at theirs; the Custom grid's values only matter under
-# Custom)
+# Custom; 0.3.7: not fill_grid, a Scale & sheet setting now)
 STYLE_KEYS = ("grid_color", "depth_lw_black", "depth_lw_color", "shade_below", "show_bends", "compact_layout",
-              "edge_margin_in", "show_notes", "fill_grid")
+              "edge_margin_in", "show_notes")
 GRID_NAMES = {"green": "Green", "gray": "Gray", "custom": "Custom"}
-GRID_LINE_STYLES = [("Solid", "solid"), ("Dashed", "dash"), ("Dotted", "dot")]
+# the Custom grid's line styles (0.3.7, D5: None leaves that set of lines out; a text button, the others icons)
+GRID_LINE_STYLES = [("Solid", "solid"), ("Dashed", "dash"), ("Dotted", "dot"), ("None", "none")]
+GRID_LINE_TIPS = ["Solid", "Dashed", "Dotted", "No lines"]
+GRID_STYLE_WORDS = {"solid": "solid", "dash": "dashed", "dot": "dotted", "none": "none"}     # the legend line
 GRID_SPACING_AUTO = "Major lines every inch, minor every tenth."
 GRID_SPACING_MANUAL = "Major and minor lines at the spacing below."
 # 0.3.6: the texts of the redesigned panel (the explanations that left it are tooltips, and Verbose hints)
@@ -149,6 +174,18 @@ DEPTH_LW_HINT = ("Which layers are black, gray or in color is set for each layer
 STYLE_HINT = "The defaults leave the most room to draw and the paper clear for colored pencil."
 VERBOSE_TIP = "Hints and notes under the controls"
 OTHER_ADD_TIP = "Add a layer of other features: seeps or springs (points), creeks (lines), a site (areas)"
+# Explorations › Options (0.3.7, D1): the four buttons (in this order) and what each explains over its summary
+OPT_TITLES = ["All layers", "Depths", "Water & screens", "Plotted"]
+OPT_TIPS = ["Within, labels and label text, for every layer", "Depth lines, TD labels and where tops come from",
+            "Screens, water levels and what is printed beside them",
+            "Every exploration on this section: untick one to leave it off"]
+OPTIONS_HINT = "Each button opens its options. A second click, ✕, Esc or a click anywhere else closes them."
+TOPS_WORDS = {"field_then_dem": "table, else LIDAR", "dem": "LIDAR", "field": "table only"}     # the Depths summary
+BESIDE_WORDS = {"off": "nothing beside", "elev": "elevation beside", "elev_date": "elev. + date beside"}
+TOP_MAX_DIFF_W = 70     # the LIDAR check's box (0.3.6: 76): its label on one line in the 268 px popup body (a 340 px
+                        # dock with the scroll bar); "9999.0 ft" still whole
+POPUP_VIEW_MARGIN = 8   # px kept between a popup scrolled into view and the view's edge
+GRID_DIM_OPACITY = 0.38  # a None part's colour swatch: the live swatch dimmed (the mockup's .gridtab .dim)
 
 ERROR_COLOR = "#c0392b"
 WARN_COLOR = "#9a6700"
@@ -242,6 +279,79 @@ def screens_summary(hits) -> str:
     if measured and atd:
         return f"{first} · {measured} measured, {atd} ATD {noun}"
     return f"{first} · {measured} measured {noun}" if measured else f"{first} · {atd} ATD {noun}"
+
+
+# ---- the option buttons' summaries (0.3.7, D1: one muted line under each title, following every change)
+def all_layers_summary(tolerance_ft: float, vertical: bool, offset: bool) -> str:
+    """"150 ft · vertical · name only"."""
+    return (f"{fmt_num(round(float(tolerance_ft), 1))} ft · {'vertical' if vertical else 'horizontal'} · "
+            f"{'name + offset' if offset else 'name only'}")
+
+
+def depths_summary(line: bool, td: bool, top_mode: str) -> str:
+    """"line · TD · table, else LIDAR"; "no line" without depth lines (TD and tops follow the line)."""
+    if not line:
+        return "no line"
+    return " · ".join(w for w in ("line", "TD" if td else "no TD", TOPS_WORDS.get(top_mode, "")) if w)
+
+
+def water_summary(on: bool, wl_label: str) -> str:
+    """"drawn · elevation beside"; "off" while screens and water levels are not drawn."""
+    return f"drawn · {BESIDE_WORDS.get(wl_label, BESIDE_WORDS['off'])}" if on else "off"
+
+
+def plotted_summary(counts: Optional[Tuple[int, int, int]]) -> str:
+    """From PlottedList.counts(): "15 of 16 · 1 off", "16 of 16 · all shown"; "none" when nothing is chosen on the
+    section; "–" before a build."""
+    if counts is None:
+        return "–"
+    n, m, k = counts
+    if not m:
+        return "none"
+    return f"{n} of {m} · {k} off" if k else f"{n} of {m} · all shown"
+
+
+# ---- Scale & sheet › Size (0.3.7, the amendment of D8): its check boxes <-> Settings.sheet + allowed_sheets
+def size_text(keys: Sequence[str], custom: bool) -> Tuple[str, str]:
+    """(the closed box's text, its tooltip) for the checked sheet `keys` (SHEET_KEYS order) or Custom: "Tabloid",
+    "Letter or Tabloid", "Smallest of 3 sizes", "Custom"; "Letter" with none checked (the mockup's round 8)."""
+    if custom:
+        return "Custom", "Custom: the page is cut to the drawing"
+    names = [SHEET_SHORT[k] for k in SHEET_KEYS if k in set(keys)]
+    if not names:
+        return "Letter", "Nothing checked: Letter"
+    if len(names) == 1:
+        return names[0], f"{names[0]} only"
+    if len(names) == 2:
+        text = f"{names[0]} or {names[1]}"
+        return text, f"{text}: the smallest that fits"
+    return f"Smallest of {len(names)} sizes", f"{', '.join(names)}: the smallest that fits"
+
+
+def sheet_from_checks(keys: Sequence[str], custom: bool) -> Tuple[str, List[str]]:
+    """(Settings.sheet, Settings.allowed_sheets) the Size list writes (no new keys): several checked, "smallest" over
+    them (tiling on the largest, as 0.3.6's Smallest that fits over its printers' sheets); one, that sheet and [it];
+    none, Letter; Custom, "custom" with the default allowed sheets (a custom page does not use them)."""
+    if custom:
+        return "custom", list(Settings().allowed_sheets)
+    on = [k for k in SHEET_KEYS if k in set(keys)]
+    if not on:
+        return "letter", ["letter"]
+    if len(on) == 1:
+        return on[0], [on[0]]
+    return "smallest", on
+
+
+def checks_from_sheet(sheet: str, allowed: Sequence[str]) -> Tuple[List[str], bool]:
+    """(the checked sheet keys, Custom) for a stored sheet and allowed list (old projects open as they say): "custom"
+    Custom; a sheet key, just that one; "smallest" (or anything else), the known keys of `allowed`, or Letter and
+    Tabloid when it names none (as scales.plan reads an empty list)."""
+    if sheet == "custom":
+        return [], True
+    if sheet in SHEET_KEYS:
+        return [sheet], False
+    on = [k for k in SHEET_KEYS if k in set(allowed or [])]
+    return (on or ["letter", "tabloid"]), False
 
 
 _SCREEN_FLAG = P.SCREEN_FLAG             # (moved to ui.problems in 0.3.6)
@@ -474,6 +584,109 @@ class _FitRow(QWidget):
         src, dst = (self._top, self._bottom) if wrap else (self._bottom, self._top)
         src.removeWidget(self._last)
         self._add(dst, self._last)
+
+
+class _GridColorButton(QgsColorButton):
+    """A Custom grid colour (0.3.7 fix, D5). Disabled (its lines None), it draws as the live swatch at
+    GRID_DIM_OPACITY, the mockup's dimmed cell, instead of Qt's disabled icon: a flat light gray, on a dark panel
+    brighter than the live swatch beside it, read as a pale colour in use rather than grayed out."""
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.EnabledChange:
+            if self.isEnabled():
+                if self.graphicsEffect() is not None:
+                    self.setGraphicsEffect(None)
+            elif self.graphicsEffect() is None:
+                dim = QGraphicsOpacityEffect(self)
+                dim.setOpacity(GRID_DIM_OPACITY)
+                self.setGraphicsEffect(dim)
+
+    def paintEvent(self, e) -> None:
+        if self.isEnabled():
+            super().paintEvent(e)
+            return
+        p = QStylePainter(self)            # (QToolButton's own paint, as if enabled: the swatch in its colour)
+        opt = QStyleOptionToolButton()
+        self.initStyleOption(opt)
+        opt.state |= QStyle.StateFlag.State_Enabled
+        pal = QPalette(opt.palette)
+        pal.setCurrentColorGroup(QPalette.ColorGroup.Active)
+        opt.palette = pal
+        p.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, opt)
+        p.end()
+
+
+class _GridTable(QWidget):
+    """Sheet style › Grid › Custom (0.3.7, the mockup's table): Major / Minor x Color, Width, Line (Solid | Dashed |
+    Dotted | None). The label, colour and width columns at least COLS px wide, the Line column takes the rest (at a
+    340 px dock 134 px: its four buttons whole); where it is narrower than a Line control needs (the 260 px dock), each
+    part's Line control goes on a row of its own under its label, colour and width, the full width, and the "Line"
+    heading hides. `rows`: (label, colour, width, line style) of the major then the minor lines."""
+
+    COLS = (36, 32, 70)                    # minimum widths of the label, colour and width columns (0.3.6: 40, 38, 70)
+    H_SPACING, V_SPACING = 6, 5
+
+    def __init__(self, rows: Sequence[Tuple[QWidget, QWidget, QWidget, W.SegmentedControl]],
+                 parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._rows = [tuple(r) for r in rows]
+        self._wrapped: Optional[bool] = None
+        self._heads = [field_label(text) for text in ("Color", "Width")]
+        self.line_head = field_label("Line")
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(self.H_SPACING)
+        self._grid.setVerticalSpacing(self.V_SPACING)
+        for col, width in enumerate(self.COLS):
+            self._grid.setColumnMinimumWidth(col, width)
+        self._grid.setColumnStretch(3, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._place(False)
+
+    def wrapped(self) -> bool:
+        """Each Line control is on a row of its own (the panel is too narrow for it beside the width)."""
+        return bool(self._wrapped)
+
+    def line_room(self) -> int:
+        """The Line column's width beside the others at this width."""
+        return self.width() - sum(self.COLS) - 3 * self.H_SPACING
+
+    def _place(self, wrapped: bool) -> None:
+        if wrapped == self._wrapped:
+            return
+        self._wrapped = wrapped
+        g = self._grid
+        for w in self._heads + [self.line_head] + [x for r in self._rows for x in r]:
+            g.removeWidget(w)
+        g.addWidget(self._heads[0], 0, 1)
+        g.addWidget(self._heads[1], 0, 2)
+        if not wrapped:
+            g.addWidget(self.line_head, 0, 3)
+        self.line_head.setHidden(wrapped)
+        for i, (lab, color, width, style) in enumerate(self._rows):
+            r = 1 + (2 * i if wrapped else i)
+            g.addWidget(lab, r, 0)
+            g.addWidget(color, r, 1)
+            g.addWidget(width, r, 2)
+            if wrapped:
+                g.addWidget(style, r + 1, 0, 1, 4)
+            else:
+                g.addWidget(style, r, 3)
+
+    def _reflow(self) -> None:
+        if not self.isVisible():           # (a hidden table has no width yet; its show checks again)
+            return
+        need = max([r[3].neededWidth() for r in self._rows] or [0])      # (each button its text or icon, whole)
+        self._place(self.line_room() < need)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._reflow()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self._reflow()
 
 
 # ---------------------------------------------------------------- the dock
@@ -787,56 +1000,68 @@ class XSectionsDock(QgsDockWidget):
         layers.addWidget(self.btn_add_points)
         self.explo_list.set_band_host(g.body)
 
-        # All layers: the rules every row follows
-        shared = g.add_subsection("All layers")
-        self.tolerance = _spin(0.0, 1.0e6, 1, 10.0, " ft of the line")
-        self.tolerance.setToolTip("Explorations and other points within this distance of the line are projected "
-                                  "onto it")
-        self.label_dir = _segmented([("Vertical", True), ("Horizontal", False)],
-                                    ["Labels written upward", "Horizontal labels, staggered"])
-        shared.addWidget(pair(field_box("Within", self.tolerance), field_box("Labels", self.label_dir)))
-        self.label_text = _combo([("Name only", False), ("Name + offset and direction", True)])
-        self.label_text.setToolTip("Name + offset: \"MW-3 · 40 ft S\" = projected 40 ft south onto the line")
-        shared.addWidget(field_box("Label text", self.label_text))
-        self.within_hint = Hint(WITHIN_HINT)
-        shared.addWidget(self.within_hint)
-
-        self._build_depth_group(g)
-        self._build_screens_group(g)
-        # Plotted: every exploration the rows choose on this section; unticked ones are left off this line
-        self.plotted = PlottedList()
-        g.addWidget(self.plotted)
+        # Options (0.3.7, D1, D2): four buttons, each with a summary of its settings, whose popups (children of the
+        # panel's content, over the sections below) hold the rules every row follows
+        self.options_sub = g.add_subsection("Options")
+        self.opt_grid = OptionGrid(self.content)
+        self.options_sub.addWidget(self.opt_grid)
+        self.options_hint = Hint(OPTIONS_HINT)
+        self.options_sub.addWidget(self.options_hint)
+        self._build_all_layers_group(self.opt_grid)
+        self._build_depth_group(self.opt_grid)
+        self._build_screens_group(self.opt_grid)
+        self._build_plotted_group(self.opt_grid)
+        self.opt_all, self.opt_depths, self.opt_water, self.opt_plotted = self.opt_grid.buttons()
+        self.opt_grid.popupToggled.connect(self._on_popup_toggled)
         self.explo_readout = _readout()
         g.addWidget(self.explo_readout)
         self.grp_explo = g
         return g
 
-    def _build_depth_group(self, g: CollapsibleSection) -> Subsection:
-        """Explorations › Depths (0.3.6; a section of its own before): Depth line, TD label, Tops from, and the
-        Checks pill."""
-        sub = g.add_subsection("Depths")
+    def _build_all_layers_group(self, grid: OptionGrid) -> OptionPopup:
+        """Explorations › Options › All layers (0.3.7: a popup; a subsection in 0.3.6): Within, Labels and Label
+        text."""
+        _b, pop = grid.add_option(OPT_TITLES[0], OPT_TIPS[0])
+        self.tolerance = _spin(0.0, 1.0e6, 1, 10.0, " ft of the line")
+        self.tolerance.setToolTip("Explorations and other points within this distance of the line are projected "
+                                  "onto it")
+        self.label_dir = _segmented([("Vertical", True), ("Horizontal", False)],
+                                    ["Labels written upward", "Horizontal labels, staggered"])
+        pop.addWidget(pair(field_box("Within", self.tolerance), field_box("Labels", self.label_dir)))
+        self.label_text = _combo([("Name only", False), ("Name + offset and direction", True)])
+        self.label_text.setToolTip("Name + offset: \"MW-3 · 40 ft S\" = projected 40 ft south onto the line")
+        pop.addWidget(field_box("Label text", self.label_text))
+        self.within_hint = Hint(WITHIN_HINT)
+        pop.addWidget(self.within_hint)
+        self.pop_all = pop
+        return pop
+
+    def _build_depth_group(self, grid: OptionGrid) -> OptionPopup:
+        """Explorations › Options › Depths (0.3.7: a popup, without the Checks pill, D4; a subsection in 0.3.6, a
+        section of its own before): Depth line, TD label, Tops from, 0 means missing and the LIDAR check."""
+        _b, pop = grid.add_option(OPT_TITLES[1], OPT_TIPS[1])
         self.depth_line = _cbox("Depth line", "Draw a line from the top of each exploration down to its bottom")
         self.td_label = _cbox("TD label", "Label the total depth, as TD 50′, just below the bottom of each line")
-        sub.addWidget(check_row(self.depth_line, self.td_label))
+        pop.addWidget(check_row(self.depth_line, self.td_label))
         self.top_mode = _combo([("Table, else LIDAR at the exploration", "field_then_dem"),
-                                ("LIDAR at the exploration", "dem"), ("Table only", "field")])
-        self.top_mode.setToolTip("Where each exploration's top comes from (all layers)")
-        sub.addWidget(field_box("Tops from", self.top_mode))
-        self.checks_more = self._more(sub, "Checks")
+                                ("LIDAR at the exploration", "dem"), ("Table only", "field")], elide=True)
+        self.top_mode.setLeadTip("Where each exploration's top comes from (all layers)")   # (+ the text, when cut)
+        pop.addWidget(field_box("Tops from", self.top_mode))
         self.zero_missing = _cbox("0 means missing",
                                   "Tops, depths, screens and water levels of 0 are taken as missing (shapefiles store "
                                   "an empty number as 0). Untick it if an elevation of 0 ft (sea level) is real; "
                                   "other features' elevation fields follow it too.")
-        self.checks_more.addWidget(self.zero_missing)
+        pop.addWidget(self.zero_missing)
         self.top_max_diff = _spin(0.0, 1.0e5, 1, 5.0, " ft")
         self.top_max_diff.setToolTip("A table top further than this from LIDAR is replaced by LIDAR (flagged). When "
                                      "that happens, a table bottom further than this from LIDAR top − depth is "
                                      "replaced too. 0 turns the checks off.")
-        self.top_max_diff.setFixedWidth(76)
+        self.top_max_diff.setFixedWidth(TOP_MAX_DIFF_W)
         self.top_max_diff.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         before = QLabel("Ignore a table top off LIDAR by over")
         before.setWordWrap(True)
         before.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        before.setToolTip(self.top_max_diff.toolTip())
         self.top_max_diff_row = QWidget()
         rl = QHBoxLayout(self.top_max_diff_row)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -844,25 +1069,39 @@ class XSectionsDock(QgsDockWidget):
         rl.addWidget(before, 1)
         rl.addWidget(self.top_max_diff, 0)
         self.top_max_diff_row.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.checks_more.addWidget(self.top_max_diff_row)
+        pop.addWidget(self.top_max_diff_row)
         self.depth_readout = _readout()
-        sub.addWidget(self.depth_readout)
-        self.grp_depth = sub
-        return sub
+        pop.addWidget(self.depth_readout)
+        self.pop_depths = self.grp_depth = pop
+        return pop
 
-    def _build_screens_group(self, g: CollapsibleSection) -> Subsection:
-        """Explorations › Water & screens (0.3.6; the Screens & water section before): Draw them, Print beside."""
-        sub = g.add_subsection("Water & screens")
+    def _build_screens_group(self, grid: OptionGrid) -> OptionPopup:
+        """Explorations › Options › Water & screens (0.3.7: a popup; a subsection in 0.3.6, the Screens & water
+        section before): Draw them, Print beside."""
+        _b, pop = grid.add_option(OPT_TITLES[2], OPT_TIPS[2])
         self.screens = _cbox("Draw them", "Draw screens and water levels: well screens, and measured and ATD water "
                              "levels, from each layer's fields or its table of water levels")
         self.screens.setMinimumHeight(CONTROL_H)
         self.wl_label = _segmented([("Off", "off"), ("Elev.", "elev"), ("+ date", "elev_date")],
                                    ["No text", "The elevation beside each water level", "Elevation and date"])
-        sub.addWidget(pair(self.screens, field_box("Print beside", self.wl_label), (5, 4)))
+        pop.addWidget(pair(self.screens, field_box("Print beside", self.wl_label)))   # (halves: 0.3.6's 5 : 4 stacks
+                                                                                      # in the 268 px popup body)
         self.screens_readout = _readout()
-        sub.addWidget(self.screens_readout)
-        self.grp_screens = sub
-        return sub
+        pop.addWidget(self.screens_readout)
+        self.pop_water = self.grp_screens = pop
+        return pop
+
+    def _build_plotted_group(self, grid: OptionGrid) -> OptionPopup:
+        """Explorations › Options › Plotted (0.3.7, D3: a popup; a subsection in 0.3.6): every exploration the rows
+        choose on this section, a checklist; unticked ones are left off this line. Its count and Show all sit in the
+        popup's header."""
+        self.plotted = PlottedList()
+        _b, pop = grid.add_option(OPT_TITLES[3], OPT_TIPS[3], after_title=[self.plotted.count_label],
+                                  links=[self.plotted.btn_show_all])
+        pop.body_layout.setContentsMargins(8, 7, 8, 9)
+        pop.addWidget(self.plotted)
+        self.pop_plotted = pop
+        return pop
 
     def _build_other_group(self) -> QWidget:
         g = self._section("Other features", "other", "xsectionsOtherGroup")
@@ -881,6 +1120,8 @@ class XSectionsDock(QgsDockWidget):
 
     def _build_export_group(self) -> QWidget:
         g = self._section("Scale & sheet", "scale", "xsectionsExportGroup")
+        defaults = Settings()
+        # Scale: the two scales, then how distances are written (0.3.7, D7: the "Distances & printers" pill before)
         sub = g.add_subsection("Scale")
         self.h_scale = ScaleCombo()
         self.v_scale = ScaleCombo()
@@ -888,7 +1129,11 @@ class XSectionsDock(QgsDockWidget):
         self.v_scale.setToolTip("Vertical scale: feet per inch of paper")
         sub.addWidget(pair(field_box("Horizontal", hrow("1 in =", self.h_scale, "ft", spacing=4)),
                            field_box("Vertical", hrow("1 in =", self.v_scale, "ft", spacing=4))))
+        self.distance_labels = _segmented([("Feet", "feet"), ("Stations", "station")], DISTANCE_TIPS)
+        sub.addWidget(field_box("Distances", self.distance_labels, tip=wrap_tip(DISTANCES_TIP)))
 
+        # Elevations: Auto | Manual; under Auto the room below the lowest point and the fill of the paper left over
+        # (0.3.7, D6: from Sheet style › Grid), under Manual the range typed
         sub = g.add_subsection("Elevations")
         self.z_mode = _segmented([("Auto", "auto"), ("Manual", "manual")],
                                  ["Rounded to the major grid", "Type the lowest and highest elevations"])
@@ -897,31 +1142,34 @@ class XSectionsDock(QgsDockWidget):
         self.tile.setToolTip("Tile along the section with match lines and one major interval of overlap")
         self.tile.setMinimumHeight(CONTROL_H)
         sub.addWidget(pair(self.z_mode, self.tile, (5, 4)))
+        self.below_in = _spin(0.0, 20.0, 2, 0.25, " in")
+        self.below_in.setToolTip(wrap_tip(ROOM_TIP))           # (0.3.7 finish, wrap_tip: a long tooltip wraps)
+        self.fill_grid = _segmented(FILL_CHOICES, [wrap_tip(tip) for tip in FILL_TIPS])
+        _set_combo_data(self.fill_grid, defaults.fill_grid)
+        self.fill_grid.setToolTip(wrap_tip(FILL_TIP))
+        self.z_auto_row = pair(field_box("Room below lowest", self.below_in, tip=wrap_tip(ROOM_TIP)),
+                               field_box("Fill sheet", self.fill_grid, tip=wrap_tip(FILL_TIP)))
+        sub.addWidget(self.z_auto_row)                # shown only under Auto (_update_enabled)
+        self.z_auto_hint = Hint(Z_AUTO_HINT)
+        sub.addWidget(self.z_auto_hint)
         self.z_min = _spin(-1.0e6, 1.0e6, 1, 10.0, " ft")
         self.z_max = _spin(-1.0e6, 1.0e6, 1, 10.0, " ft")
         self.z_range_row = pair(field_box("Lowest", self.z_min), field_box("Highest", self.z_max))
         sub.addWidget(self.z_range_row)               # shown only under Manual (_update_enabled)
 
+        # Sheet: Size | Format (0.3.7, the amendment of D8: the Size list has a check box per sheet size and Custom;
+        # Printers take is gone), Orientation, Title
         sub = g.add_subsection("Sheet")
-        self.sheet = _combo(SHEET_CHOICES)
-        self.fmt = _combo(FORMAT_CHOICES)
-        sub.addWidget(pair(field_box("Size", self.sheet), field_box("Format", self.fmt)))
+        self.sheet = SheetSizeCombo(SIZE_ITEMS, SIZE_CUSTOM, SIZE_FOOT, size_text)
+        self.fmt = _combo(FORMAT_CHOICES, elide=True)
+        self.sheet_row = pair(field_box("Size", self.sheet, tip=wrap_tip(SIZE_TIP)), field_box("Format", self.fmt))
+        sub.addWidget(self.sheet_row)
         # every sheet landscape or portrait, or Auto as before (0.3.5; off with a custom page, see _update_enabled)
         self.orientation = _segmented(ORIENT_CHOICES, ORIENT_TIPS)
         sub.addWidget(field_box("Orientation", self.orientation))
         self.title_text = QLineEdit()
         self.title_text.setPlaceholderText("Optional (project, site…)")
         sub.addWidget(field_box("Title", self.title_text))
-        self.distances_more = self._more(sub, "Distances & printers")
-        self.distance_labels = _segmented([("Feet", "feet"), ("Stations", "station")],
-                                          ["0, 1,000, 2,000", "0+00, 10+00"])
-        self.allowed_sheets = QgsCheckableComboBox()
-        for key in SHEET_KEYS:
-            self.allowed_sheets.addItemWithCheckState(SHEET_SHORT[key], Qt.CheckState.Unchecked, key)
-        self.allowed_sheets.setToolTip("Sheets your printers take: used by 'Smallest' and for tiling")
-        _narrow(self.allowed_sheets)
-        self.distances_more.addWidget(pair(field_box("Distances", self.distance_labels),
-                                           field_box("Printers take", self.allowed_sheets)))
         self.export_readout = _readout()
         sub.addWidget(self.export_readout)
         self.grp_export = g
@@ -930,14 +1178,15 @@ class XSectionsDock(QgsDockWidget):
     def _build_style_group(self) -> QWidget:
         g = self._section("Sheet style", "style", "xsectionsStyleGroup")
         defaults = Settings()
-        # Grid: Green | Gray (presets, one muted line of their colours and widths) | Custom (a small table), its
-        # spacing (from the scale, or typed: moved here from Scale & sheet in 0.3.6) and the fill
+        # Grid: Green | Gray (presets) | Custom (a small table), one muted legend line of the lines in use, and its
+        # spacing (from the scale, or typed: moved here from Scale & sheet in 0.3.6; the fill went to Scale & sheet ›
+        # Elevations in 0.3.7)
         sub = g.add_subsection("Grid")
         self.grid_color = _segmented([("Green", "green"), ("Gray", "gray"), ("Custom", "custom")],
                                      ["Green engineering pad (the default)", "Gray, for black-and-white printers",
                                       "Your own colors, widths and line styles"])
         sub.addWidget(field_box("Look", self.grid_color))
-        self.grid_info = _note(self._grid_info_text("green"))       # (always shown under Green / Gray)
+        self.grid_info = _note(self._grid_info_text("green"))       # (always shown: 0.3.7, under Custom too)
         self.grid_info.setTextFormat(Qt.TextFormat.RichText)
         sub.addWidget(self.grid_info)
         sub.addWidget(self._build_custom_grid())
@@ -954,13 +1203,6 @@ class XSectionsDock(QgsDockWidget):
         self.grid_spacing_row = pair(field_box("Horizontal, ft", hrow(self.h_major, "/", self.h_minor, spacing=4)),
                                      field_box("Vertical, ft", hrow(self.v_major, "/", self.v_minor, spacing=4)))
         sub.addWidget(self.grid_spacing_row)          # shown only while the spacing is typed (_update_enabled)
-        self.fill_grid = _segmented(FILL_CHOICES, FILL_TIPS)
-        _set_combo_data(self.fill_grid, defaults.fill_grid)
-        self.fill_grid.setToolTip("Add whole major intervals of grid to use the sheet height (not on a custom page "
-                                  "size or with manual elevations). Both puts the larger half below, for the geology")
-        self.below_in = _spin(0.0, 20.0, 2, 0.25, " in")
-        self.below_in.setToolTip("Grid kept below the lowest point, in paper inches")
-        sub.addWidget(pair(field_box("Fill sheet", self.fill_grid), field_box("Below lowest", self.below_in)))
 
         # Depth lines: the widths of the exploration lines (0.3.4), Reset in the heading
         self.btn_lw_reset = link_button("Reset", "Back to 0.75 pt and 1.6 pt")
@@ -1002,27 +1244,18 @@ class XSectionsDock(QgsDockWidget):
         return g
 
     def _build_custom_grid(self) -> QWidget:
-        """Sheet style › Grid: Custom: Major / Minor x Color, Width, Line, then the spacing note (Verbose) and "Start
-        from Green · Gray" at the right (the mockup's table)."""
+        """Sheet style › Grid: Custom: Major / Minor x Color, Width, Line (Solid | Dashed | Dotted | None), a
+        _GridTable, then the spacing note (Verbose) and "Start from Green · Gray" at the right (the mockup's table)."""
         box = self.grid_custom_box = QWidget()
         outer = QVBoxLayout(box)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
-        table = QWidget()
-        gl = QGridLayout(table)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setHorizontalSpacing(6)
-        gl.setVerticalSpacing(5)
-        for col, width in ((0, 40), (1, 38), (2, 70)):
-            gl.setColumnMinimumWidth(col, width)
-        gl.setColumnStretch(3, 1)
-        for col, text in ((1, "Color"), (2, "Width"), (3, "Line")):
-            gl.addWidget(field_label(text), 0, col)
-        for r, part in ((1, "major"), (2, "minor")):
+        rows = []
+        for part in ("major", "minor"):
             word = part.capitalize()
             lab = QLabel(word)
             lab.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-            color = QgsColorButton()
+            color = _GridColorButton()                    # (a QgsColorButton, dimmed while its lines are None)
             color.setShowMenu(False)
             color.setAllowOpacity(False)
             color.setFixedSize(30, 24)
@@ -1032,20 +1265,18 @@ class XSectionsDock(QgsDockWidget):
             width.setToolTip(f"{word} grid width")
             width.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             width.setMinimumWidth(70)
-            style = _segmented(GRID_LINE_STYLES, [t for t, _v in GRID_LINE_STYLES])
+            style = _segmented(GRID_LINE_STYLES, GRID_LINE_TIPS)
             for i, (_text, v) in enumerate(GRID_LINE_STYLES):
-                style.setItemIcon(i, LINE_STYLE_ICONS[v], QSize(*LINE_STYLE_ICON_SIZE))
+                if v in LINE_STYLE_ICONS:                  # (None: a text button)
+                    style.setItemIcon(i, LINE_STYLE_ICONS[v], QSize(*LINE_STYLE_ICON_SIZE))
             style.setToolTip(f"{word} grid line style")
             style.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-            gl.addWidget(lab, r, 0)
-            gl.addWidget(color, r, 1)
-            gl.addWidget(width, r, 2)
-            gl.addWidget(style, r, 3)
+            rows.append((lab, color, width, style))
             setattr(self, f"grid_{part}_color", color)
             setattr(self, f"grid_{part}_width", width)
             setattr(self, f"grid_{part}_style", style)
-        table.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        outer.addWidget(table)
+        self.grid_table = _GridTable(rows)
+        outer.addWidget(self.grid_table)
         foot = QWidget()
         fl = QHBoxLayout(foot)
         fl.setContentsMargins(0, 0, 0, 0)
@@ -1062,6 +1293,14 @@ class XSectionsDock(QgsDockWidget):
         box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         box.hide()
         return box
+
+    @staticmethod
+    def _grid_custom_text(major_style: str, minor_style: str) -> str:
+        """The legend line under Custom (0.3.7, D5): "Major: dashed · Minor: none", and "· no grid" with both None."""
+        def word(style: str) -> str:
+            return GRID_STYLE_WORDS.get(style, GRID_STYLE_WORDS["solid"])
+        text = f"Major: {word(major_style)} · Minor: {word(minor_style)}"
+        return text + (" · no grid" if major_style == minor_style == "none" else "")
 
     @staticmethod
     def _grid_info_text(preset: str) -> str:
@@ -1086,14 +1325,19 @@ class XSectionsDock(QgsDockWidget):
                 _set_combo_data(seg, "solid")
 
     def _sync_grid_ui(self, *args) -> None:
-        """The preset line under Green / Gray or the Custom table, and the spacing note (a Verbose hint: the
-        automatic spacing, or the one typed below)."""
+        """The legend line (the preset's under Green / Gray; 0.3.7: under Custom the line styles in words), the Custom
+        table (a None part's colour and width grayed: those lines are not drawn; its swatch dimmed, _GridColorButton),
+        and the spacing note (a Verbose hint: the automatic spacing, or the one typed below)."""
         v = self.grid_color.currentData()
         custom = v == "custom"
         self.grid_custom_box.setHidden(not custom)
-        self.grid_info.setHidden(custom)
-        if not custom:
-            self.grid_info.setText(self._grid_info_text(v))
+        self.grid_info.setHidden(False)
+        styles = {part: getattr(self, f"grid_{part}_style").currentData() or "solid" for part in ("major", "minor")}
+        for part, style in styles.items():
+            for w in (getattr(self, f"grid_{part}_color"), getattr(self, f"grid_{part}_width")):
+                w.setEnabled(style != "none")
+        self.grid_info.setText(self._grid_custom_text(styles["major"], styles["minor"]) if custom
+                               else self._grid_info_text(v))
         self.grid_spacing_note.setText(GRID_SPACING_AUTO if self.grid_auto.isChecked() else GRID_SPACING_MANUAL)
 
     def _on_grid_preset(self, *args) -> None:
@@ -1134,14 +1378,15 @@ class XSectionsDock(QgsDockWidget):
     # ---- theme (light: navy bars; dark: the palette's highlight)
     def _apply_theme(self) -> None:
         t = theme_for(self.palette())
-        key = (t.dark, t.bar.name(), t.ink.name(), t.field.name(), t.muted.name())
+        key = (t.dark, t.bar.name(), t.ink.name(), t.field.name(), t.muted.name(), t.field_ink.name(),
+               t.disabled.name())
         if key == self._theme_key:
             return
         self._theme_key = key
         self._theme = t
         w = self.widget()
         if w is not None:
-            w.setStyleSheet(panel_stylesheet(t))
+            w.setStyleSheet(panel_stylesheet(t, plain_text=True))
         for sec in self.sections:
             sec.header.update()
 
@@ -1163,7 +1408,8 @@ class XSectionsDock(QgsDockWidget):
     # ---- open / closed sections (never saved)
     def collapse_all(self) -> None:
         """Every section closed, the pills folded, surface and point-row editors closed (the ground's open while
-        there is no DEM), every exploration row back on its Layer tab, the check card closed."""
+        there is no DEM), every exploration row back on its Layer tab, the check card and an option popup closed."""
+        self.opt_grid.close_popup()
         for sec in self.sections:
             sec.setCollapsed(True)
         for d in self._disclosures:
@@ -1180,6 +1426,44 @@ class XSectionsDock(QgsDockWidget):
     def _close_card(self, *args) -> None:
         """The check card goes (the panel scrolled, a section opened or closed)."""
         self.card_host.close()
+
+    # ---- Explorations' option buttons (0.3.7, D1, D2)
+    def _on_popup_toggled(self, index: int, opened: bool) -> None:
+        """A popup opened near the bottom of the view scrolls into it (once it is placed)."""
+        if opened:
+            QTimer.singleShot(0, functools.partial(self._show_popup, index))
+
+    def _show_popup(self, index: int) -> None:
+        """The open popup into view, POPUP_VIEW_MARGIN px from its edges; one taller than the view (a short dock)
+        with its top there instead (0.3.7 fix: scrolled the usual way, Qt centres it and cuts off its header; the
+        rest is reached with the scroll bar or the wheel, which keep it open)."""
+        try:
+            pop = self.opt_grid.current()
+            if self.opt_grid.current_index() != index or pop is None:
+                return
+            m = POPUP_VIEW_MARGIN
+            bar = self.scroll.verticalScrollBar()
+            view_h = self.scroll.viewport().height()
+            top = pop.mapTo(self.content, QPoint(0, 0)).y()
+            if pop.height() + 2 * m > view_h:
+                shown = top - bar.value()
+                if shown < 0 or shown + pop.height() > view_h:      # (whole in the view already: left as it is)
+                    bar.setValue(top - m)
+            else:
+                self.scroll.ensureWidgetVisible(pop, 0, m)
+        except RuntimeError:                    # (the panel is going away)
+            pass
+
+    def _sync_option_summaries(self, *args) -> None:
+        """The four buttons' summaries from their widgets (and the Plotted list's counts); the Plotted popup's title
+        tells the whole count (PlottedList.text())."""
+        self.opt_all.setSummary(all_layers_summary(self.tolerance.value(), bool(self.label_dir.currentData()),
+                                                   bool(self.label_text.currentData())))
+        self.opt_depths.setSummary(depths_summary(self.depth_line.isChecked(), self.td_label.isChecked(),
+                                                  self.top_mode.currentData()))
+        self.opt_water.setSummary(water_summary(self.screens.isChecked(), self.wl_label.currentData()))
+        self.opt_plotted.setSummary(plotted_summary(self.plotted.counts()))
+        self.pop_plotted.title_label.setToolTip(self.plotted.text())
 
     # ---- Verbose (0.3.6, D13: per user, never in the project)
     def _on_verbose_toggled(self, on: bool) -> None:
@@ -1463,6 +1747,7 @@ class XSectionsDock(QgsDockWidget):
         self.btn_add_points.clicked.connect(lambda: self.add_point_layer())
         self.btn_add_other.clicked.connect(lambda: self.add_other_points())
         self.plotted.toggled.connect(self._on_plotted_toggled)
+        self.plotted.toggled.connect(self._sync_option_summaries)       # (after: the count of the tick)
         self.plotted.showAllRequested.connect(self.show_all_plotted)
         self.tolerance.valueChanged.connect(ch)
         self.label_text.currentIndexChanged.connect(ch)
@@ -1480,6 +1765,12 @@ class XSectionsDock(QgsDockWidget):
         self.screens.toggled.connect(ch)
         self.screens.toggled.connect(self._update_enabled)
         self.wl_label.currentIndexChanged.connect(ch)
+        # the option buttons' summaries follow every change (0.3.7, D1)
+        for sig in (self.tolerance.valueChanged, self.label_dir.currentIndexChanged,
+                    self.label_text.currentIndexChanged, self.top_mode.currentIndexChanged,
+                    self.wl_label.currentIndexChanged, self.depth_line.toggled, self.td_label.toggled,
+                    self.screens.toggled):
+            sig.connect(self._sync_option_summaries)
         # export
         self.h_scale.editTextChanged.connect(self._on_scale_changed)
         self.v_scale.editTextChanged.connect(self._on_scale_changed)
@@ -1489,10 +1780,9 @@ class XSectionsDock(QgsDockWidget):
         self.z_mode.currentIndexChanged.connect(ch)
         self.z_mode.currentIndexChanged.connect(self._update_enabled)
         self.distance_labels.currentIndexChanged.connect(ch)
-        self.sheet.currentIndexChanged.connect(ch)
-        self.sheet.currentIndexChanged.connect(self._update_enabled)
+        self.sheet.checksChanged.connect(ch)                    # (0.3.7: the Size list's check boxes)
+        self.sheet.checksChanged.connect(self._update_enabled)
         self.orientation.currentIndexChanged.connect(ch)
-        self.allowed_sheets.checkedItemsChanged.connect(lambda _items: ch())
         self.tile.toggled.connect(ch)
         self.fmt.currentIndexChanged.connect(ch)
         self.title_text.textChanged.connect(ch)
@@ -1503,6 +1793,7 @@ class XSectionsDock(QgsDockWidget):
             getattr(self, f"grid_{part}_color").colorChanged.connect(ch)
             getattr(self, f"grid_{part}_width").valueChanged.connect(ch)
             getattr(self, f"grid_{part}_style").currentIndexChanged.connect(ch)
+            getattr(self, f"grid_{part}_style").currentIndexChanged.connect(self._sync_grid_ui)   # (None: grayed)
         self.btn_grid_from_green.clicked.connect(lambda: self._grid_start_from("green"))
         self.btn_grid_from_gray.clicked.connect(lambda: self._grid_start_from("gray"))
         self.depth_lw_black.valueChanged.connect(ch)
@@ -1574,6 +1865,7 @@ class XSectionsDock(QgsDockWidget):
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
         self.card_host.close()
+        self.opt_grid.close_popup()
         if self.isHidden():               # closed or toggled off (not merely behind another dock tab)
             self._was_closed = True
             self._hide_cursor()
@@ -1630,10 +1922,8 @@ class XSectionsDock(QgsDockWidget):
         s.z_min, s.z_max = self.z_min.value(), self.z_max.value()
         s.below_in = self.below_in.value()
         s.distance_labels = self.distance_labels.currentData()
-        s.sheet = self.sheet.currentData()
+        s.sheet, s.allowed_sheets = sheet_from_checks(self.sheet.checked(), self.sheet.isCustom())   # (0.3.7)
         s.orientation = self.orientation.currentData() or "auto"
-        allowed = [k for k in SHEET_KEYS if k in (self.allowed_sheets.checkedItemsData() or [])]
-        s.allowed_sheets = allowed or list(Settings().allowed_sheets)
         s.tile = self.tile.isChecked()
         s.export_format, dpi = self.fmt.currentData()
         s.dpi = dpi if s.export_format == "png" else int(self._settings.dpi)
@@ -1736,11 +2026,8 @@ class XSectionsDock(QgsDockWidget):
             self.z_max.setValue(s.z_max)
             self.below_in.setValue(s.below_in)
             _set_combo_data(self.distance_labels, s.distance_labels)
-            _set_combo_data(self.sheet, s.sheet)
+            self.sheet.setChecks(*checks_from_sheet(s.sheet, s.allowed_sheets))     # (0.3.7: the Size list)
             _set_combo_data(self.orientation, clean_orientation(s.orientation))
-            for i in range(self.allowed_sheets.count()):
-                on = self.allowed_sheets.itemData(i) in (s.allowed_sheets or [])
-                self.allowed_sheets.setItemCheckState(i, Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
             self.tile.setChecked(bool(s.tile))
             if not _set_combo_data(self.fmt, (s.export_format, int(s.dpi))):
                 for i in range(self.fmt.count()):
@@ -1769,6 +2056,7 @@ class XSectionsDock(QgsDockWidget):
         self._track_layer_signals()
         self._schedule()
         self._update_chips()
+        self._sync_option_summaries()
 
     def save_settings(self) -> bool:
         """Write the current settings to the project (only if they changed)."""
@@ -1833,6 +2121,7 @@ class XSectionsDock(QgsDockWidget):
         self._update_problems()                          # (no model: only the rows' own problems stay)
         self.collapse_all()
         self._update_chips()
+        self._sync_option_summaries()
 
     def _guess_layers(self, s: Settings, layers: Optional[Sequence[Any]] = None) -> None:
         """Fill layer ids in a fresh Settings from layer names in the project (or among `layers`): the DEM, the
@@ -2442,15 +2731,19 @@ class XSectionsDock(QgsDockWidget):
         self.z_min.setEnabled(manual_z)
         self.z_max.setEnabled(manual_z)
         self.z_range_row.setHidden(not manual_z)              # (0.3.6: Lowest | Highest only under Manual)
+        self.z_auto_row.setHidden(manual_z)                   # (0.3.7: Room below lowest | Fill sheet only under Auto)
+        self.z_auto_hint.setWanted(not manual_z)
         self.below_in.setEnabled(not manual_z)
-        self.allowed_sheets.setEnabled(self.sheet.currentData() == "smallest")
         # a custom page is sized to the drawing (no orientation, no fill); a manual range is drawn as typed
-        custom = self.sheet.currentData() == "custom"
+        custom = self.sheet.isCustom()
         self.orientation.setEnabled(not custom)
         for i, tip in enumerate(ORIENT_TIPS):
             self.orientation.setItemToolTip(i, ORIENT_CUSTOM_TIP if custom else tip)
         self.orientation.setToolTip(ORIENT_CUSTOM_TIP if custom else "")
         self.fill_grid.setEnabled(not custom and not manual_z)
+        for i, tip in enumerate(FILL_TIPS):
+            self.fill_grid.setItemToolTip(i, wrap_tip(FILL_CUSTOM_TIP if custom else tip))
+        self.fill_grid.setToolTip(wrap_tip(FILL_CUSTOM_TIP if custom else FILL_TIP))
         line = self.depth_line.isChecked()
         for w in (self.top_mode, self.zero_missing, self.td_label, self.depth_lw_black, self.depth_lw_color,
                   self.btn_lw_reset):
@@ -2608,6 +2901,7 @@ class XSectionsDock(QgsDockWidget):
             lab.setWanted(False)
         self._update_type_counts(None)
         self.plotted.set_entries(None)
+        self._sync_option_summaries()
         self._update_problems()
         geom, crs = self.current_line_geometry()
         factor = _crs_factor_to_ft(crs) if geom is not None else math.nan
@@ -2681,6 +2975,7 @@ class XSectionsDock(QgsDockWidget):
         self._show_readout(self.explo_readout, self._explo_lines(model, plan, s))
         self._update_type_counts(model)
         self.plotted.set_entries(self._plotted_groups(model, s))
+        self._sync_option_summaries()
         dl = depth_sources_line(model.hits, s)
         self._show_readout(self.depth_readout, [dl] if dl else [])
         self._show_readout(self.screens_readout, self._screens_lines(model, s))
@@ -2819,9 +3114,11 @@ class XSectionsDock(QgsDockWidget):
         return groups
 
     def _plotted_detail(self, h, s: Settings) -> str:
-        """"1,060 ft · 25 ft L" (or "10+60 · 25 ft L"): where an exploration of the Plotted list is."""
+        """"1,060 ft · 25 ft L · S" (or "10+60 · 25 ft L · S"): where an exploration of the Plotted list is, and the
+        direction it was projected in (0.3.7, D3; none for one on the line)."""
         off = f"{h.offset:.1f}".rstrip("0").rstrip(".")
-        return f"{self._dist(h.station, s)} · {off} ft {h.side}"
+        direction = getattr(h, "direction", "") or ""
+        return f"{self._dist(h.station, s)} · {off} ft {h.side}" + (f" · {direction}" if direction else "")
 
     def _other_lines(self, model, s: Settings) -> List[str]:
         """The Other features readout: per row that is on, what is plotted (points, crossings or pieces), near, past
@@ -3675,6 +3972,7 @@ class XSectionsDock(QgsDockWidget):
         except (TypeError, RuntimeError):
             pass
         self.card_host.close()
+        self.opt_grid.close_popup()                       # (and its application event filter)
         self._hide_cursor()
         self._disconnect_hover()
         self.feedback.remove()

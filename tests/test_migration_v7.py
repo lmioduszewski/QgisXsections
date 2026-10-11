@@ -37,8 +37,8 @@ class SheetStyleKeys(unittest.TestCase):
 
     def test_constants(self):
         self.assertEqual(GRID_CHOICES, ("green", "gray", "custom"))
-        self.assertEqual(GRID_STYLES, SURFACE_STYLES)
-        self.assertEqual(GRID_STYLES, ("solid", "dash", "dot"))
+        self.assertEqual(GRID_STYLES, SURFACE_STYLES + ("none",))     # 0.3.7: "none", the grid only
+        self.assertEqual(SURFACE_STYLES, ("solid", "dash", "dot"))
         self.assertEqual(GRID_PRESETS, {"green": (("#5f9a72", 0.7, "solid"), ("#a8c8b2", 0.35, "solid")),
                                         "gray": (("#6e6e6e", 0.7, "solid"), ("#b4b4b4", 0.35, "solid"))})
         self.assertEqual((GRID_W_MIN, GRID_W_MAX), (0.1, 3.0))

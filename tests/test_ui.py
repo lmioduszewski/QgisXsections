@@ -263,11 +263,13 @@ class DockTests(unittest.TestCase):
                 self.assertEqual((d.settings().compact_layout, d.settings().fill_grid), (compact, fill))
 
     def test_settings_roundtrip_through_widgets(self):
+        # (0.3.7: several sizes checked in the Size list are written as "smallest" with them; a fixed sheet's form,
+        # ("tabloid", ["tabloid"]), is tests.test_panel_037's)
         s = default_settings(self.prj, self.dem, self.pts, self.lines, h_scale=200.0, v_scale=20.0,
                              types=["Boring", "CPT"], label_offset=True, label_vertical=False, depth_line=False,
                              top_mode="dem", grid_auto=False, h_major=500.0, h_minor=50.0, v_major=10.0,
                              v_minor=2.0, z_mode="manual", z_min=400.0, z_max=700.0, below_in=0.5,
-                             fill_grid="both", distance_labels="station", sheet="tabloid",
+                             fill_grid="both", distance_labels="station", sheet="smallest",
                              allowed_sheets=["letter", "tabloid", "ansid"], tile=False, export_format="png",
                              dpi=600, title="Site X", grid_color="custom", grid_major_color="#1f6fb2",
                              grid_major_width=1.25, grid_major_style="dash", grid_minor_color="#c2185b",
@@ -1042,11 +1044,12 @@ class PreviewTests(unittest.TestCase):
 
     def test_toolbar_has_no_save_or_editors(self):
         """0.3.1: matplotlib's toolbar is gone (its rectangle zoom distorted the vertical exaggeration). Fit, zoom
-        out / in (the whole plot), Surfaces CSV… and (0.3.2) the two hover toggles; no save, no editors, no points
-        CSV."""
+        out / in (the whole plot), Surfaces CSV…, (0.3.2) the two hover toggles and (0.3.7) Full screen; no save, no
+        editors, no points CSV."""
         pv = PreviewWidget()
         names = [a.text() for a in pv.toolbar.actions() if a.text()]
-        self.assertEqual(names, ["Fit", "Zoom out", "Zoom in", "Surfaces CSV…", "Readout row", "Popup"])
+        self.assertEqual(names, ["Fit", "Zoom out", "Zoom in", "Surfaces CSV…", "Readout row", "Popup",
+                                 "Full screen"])
         for gone in ("Home", "Back", "Forward", "Pan", "Zoom", "Save", "Subplots", "Customize", "Points CSV…"):
             self.assertNotIn(gone, names)
         self.assertEqual(pv.zoom_label.text(), "100%")

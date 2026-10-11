@@ -704,21 +704,22 @@ class Problems(_Rows):
 class PlottedAndLists(_Rows):
     def test_plotted(self):
         pl = R.PlottedList()
-        self.assertEqual((pl.heading.title(), pl.heading.label.text()), ("Plotted", "PLOTTED"))
-        self.assertTrue(pl.heading.isAncestorOf(pl.btn_show_all) and not pl.btn_show_all.isHidden())
+        # (0.3.7: no heading; the count and Show all sit in the Plotted popup's header, the dock's)
+        self.assertFalse(hasattr(pl, "heading"))
+        self.assertFalse(pl.btn_show_all.isHidden())
         self.assertEqual(pl.btn_show_all.text(), "Show all")
-        self.assertIsInstance(pl.count_label, W.Hint)
+        self.assertIsInstance(pl.count_label, QLabel)
+        self.assertNotIsInstance(pl.count_label, W.Hint)
         self.assertIsInstance(pl.hint, W.Hint)
         self.assertEqual(pl.hint.text(), "Untick one to leave it off this section only.")
-        self.assertEqual((pl.count_label.text(), pl.count_label.wanted()), ("", False))
-        self.assertEqual((pl.text(), pl.heading.toolTip()), ("Plotted explorations", "Plotted explorations"))
+        self.assertEqual((pl.count_label.text(), pl.count_label.isHidden()), ("", True))
+        self.assertEqual((pl.text(), pl.count_label.toolTip()), ("Plotted explorations", "Plotted explorations"))
         pl.set_entries([("Explorations", [(self.pts.id(), 1, "B-1", "300 ft", True), (self.pts.id(), 2, "B-2",
                                                                                       "900 ft", True),
                                           (self.pts.id(), 3, "B-3", "1,200 ft", False)])])
         self.assertEqual(pl.text(), "Plotted explorations (2 of 3, 1 left off by you)")
-        self.assertEqual(pl.heading.toolTip(), pl.text())
-        self.assertEqual((pl.count_label.text(), pl.count_label.wanted()), ("2 of 3", True))
-        self.assertTrue(pl.count_label.isHidden())                        # Verbose only
+        self.assertEqual(pl.count_label.toolTip(), pl.text())
+        self.assertEqual((pl.count_label.text(), pl.count_label.isHidden()), ("2 of 3", False))   # Verbose off too
         W.set_verbose(True)
         self.addCleanup(W.set_verbose, False)
         self.assertFalse(pl.count_label.isHidden())

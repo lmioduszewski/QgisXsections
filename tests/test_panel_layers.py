@@ -371,7 +371,7 @@ class LeftOff(LayersCase):
                                                       key=lambda h: (h.station, h.label))])
             self.assertEqual(st, sorted(st))
         b1 = next(e for e in items if e[2] == "B-1")
-        self.assertEqual(b1[3], "300 ft · 40 ft L")
+        self.assertEqual(b1[3], "300 ft · 40 ft L · S")          # (0.3.7: the direction, h.direction)
         # untick B-2: left off this line (the sheet, the CSV and the map highlights), saved for this line
         self.untick(self.pts, "B-2")
         b2 = hidden_key(lk, self.pts.id(), fid_of(self.pts, "B-2"))
@@ -739,7 +739,7 @@ class OtherPointsSection(LayersCase):
         self.assertIs(d.sections[i + 1], d.grp_other)
         self.assertEqual((d.grp_other.title(), d.grp_other.objectName()), ("Other features", "xsectionsOtherGroup"))
         self.assertEqual(d.btn_add_other.text(), "+ Add layer")
-        self.assertTrue(d.grp_explo.isAncestorOf(d.plotted) and d.grp_explo.isAncestorOf(d.btn_add_points))
+        self.assertTrue(d.pop_plotted.isAncestorOf(d.plotted) and d.grp_explo.isAncestorOf(d.btn_add_points))
         self.assertEqual(self.chips()["Other features"], ("Seeps", False))      # before a model
         d.refresh()
         self.assertEqual(self.chips()["Other features"], ("Seeps · 4 plotted", False))

@@ -54,7 +54,8 @@ The shared data classes are in `xsections/core/model.py`. Code against them exac
 4. Printers: Letter and Tabloid normally, rarely a plotter. Default sheet = smallest of
    `allowed_sheets` (["letter", "tabloid"]), landscape first, then portrait. Long sections are
    **tiled** across sheets with match lines (`tile`, default on). (Since 0.3.5 this is the *Auto* page
-   orientation; *Landscape* or *Portrait* uses only that one: decision 25.)
+   orientation; *Landscape* or *Portrait* uses only that one: decision 25. Since 0.3.7 the panel writes `sheet` and
+   `allowed_sheets` from its Size list, a check box per sheet size, and has no Printers take: decision 28.)
 5. CRS: usually EPSG:2926 / EPSG:2927 (US survey feet). Treat ftUS as feet via
    `QgsUnitTypes.fromUnitToUnitFactor(unit, Qgis.DistanceUnit.Feet)` (2 ppm, negligible).
 6. Labels vertical by default; name only by default.
@@ -113,6 +114,8 @@ the compact layout and the fill below are the defaults (decision 14).
     whole major intervals to use the sheet height, all below, or split with the larger half below (room for the
     geology). Never on a custom page (sized to the drawing), and never with a manual elevation range (since
     version 4: the sheet shows the range as typed, rounded to the major grid; the panel disables the choice).
+    Since 0.3.7 Fill sheet sits in Scale & sheet › Elevations beside Room below lowest (`below_in`), both shown only
+    under Auto (decision 28).
 
 ## Decisions from the user (2026-10-01, second round: new defaults, settings version 4)
 
@@ -582,7 +585,8 @@ the compact layout and the fill below are the defaults (decision 14).
       that default. So keep the Green and Gray buttons, and add a Custom button"). `model.GRID_PRESETS`: Green
       (the default; major #5f9a72 0.7 pt, minor #a8c8b2 0.35 pt, solid) and Gray (#6e6e6e / #b4b4b4, the same
       widths); under a preset one muted line shows its colours and widths. Custom: the major and minor colour (no
-      opacity), width (0.1-3 pt) and line (Solid | Dashed | Dotted), with "Start from Green · Gray". The first
+      opacity), width (0.1-3 pt) and line (Solid | Dashed | Dotted; 0.3.7: and None, decision 28), with "Start
+      from Green · Gray". The first
       Custom starts from the preset in use (`grid_custom_used`, stored with the project, so a reopened project's
       values are never overwritten by that first start), and Green or Gray never touch the custom values: Custom
       comes back with them. `model.grid_spec(s)` gives what the sheet and the preview draw. Dashes are absolute
@@ -864,6 +868,9 @@ the compact layout and the fill below are the defaults (decision 14).
         scale (1 in, 0.1 in) and, unticked, the horizontal and vertical major / minor spacing, moved here from Scale &
         sheet; Fill sheet | Below lowest), Depth lines (Black & gray | Color, Reset in the heading), Page (Printer
         edge; Compact layout, Notes, Bend lines, Shade below ground). The NEW tag and the dashed rule are gone.
+      (0.3.7, decision 28: Explorations' All layers, Depths, Water & screens and Plotted are the popups of four option
+      buttons under Options, Depths without the Checks pill; Distances is under Scale; Room below lowest | Fill sheet
+      under Elevations with Auto; Sheet is Size | Format, Printers take gone.)
     - **Layer rows are cards; an open one joins its section ("Flare")** (D4, D5; `widgets.LayerCard`): a closed row
       is a small card (1 px `field_line` border, `row_rail` on hover, radius 4 px); a click anywhere on it but its
       check box, colour button, badge and ⋯ opens its editor. Open, the row and its editor are one light band
@@ -899,7 +906,8 @@ the compact layout and the fill below are the defaults (decision 14).
       + Surface, + Bands…, + MODFLOW 6…, + Add layer, Legend, Label, Type, Types, Depth line, TD label, Tops from, 0
       means missing, Draw them, Print beside, Lowest, Highest, Size, Look, Fill sheet, Below lowest, Black & gray.
       Set-once settings fold under round pills (Units & datum, Checks, Distances & printers) that open a dashed box
-      (D6, `widgets.Disclosure`).
+      (D6, `widgets.Disclosure`). (0.3.7: Below lowest is Room below lowest, and Units & datum the only pill:
+      decision 28.)
     - **Verbose** (D13): a checkable last item of the ⋯ menu ("Verbose", tooltip "Hints and notes under the
       controls"), off by default, stored per user in QgsSettings `xsections/verbose` (`widgets.verbose`,
       `set_verbose`, `verbose_hub().changed`, through `settings_store.user_value`), never in the project. Off: no
@@ -939,9 +947,10 @@ the compact layout and the fill below are the defaults (decision 14).
       reads "Surfaces › Units & datum" there (`OLD_PLACES`; the core's text is unchanged).
     - **Light and dark** (D16; `widgets.theme_for`): the mockup's light and dark tokens. The dark ones are fixed
       colours (bar #2f5a6f, tile #233038, band #1c3341 ...), no longer the palette's highlight (Night Mapping's
-      orange); ink, field and disabled colours still come from the palette, and the panel's own background stays the
-      palette's Window (#323232 in Night Mapping). Sizes are the mockup's px at Segoe UI 9 pt (12 px), fonts scaled
-      from the application font; the mockup's weight 500 is drawn DemiBold, as Edge shows Segoe UI (`MEDIUM`).
+      orange); ink, field and disabled colours still come from the palette (0.3.7, decision 28: but ink and disabled
+      where they would not read on the dark tokens), and the panel's own background stays the palette's Window
+      (#323232 in Night Mapping). Sizes are the mockup's px at Segoe UI 9 pt (12 px), fonts scaled from the
+      application font; the mockup's weight 500 is drawn DemiBold, as Edge shows Segoe UI (`MEDIUM`).
     - **Narrow panels** (260 px with Segoe UI 9): nothing is cut. Two fields side by side (`pair` -> `widgets._Pair`)
       stack while a column is narrower than what it holds; the Page check boxes go to one column (`checkbox_grid` ->
       `_CheckGrid`); the Ends row and the three add-surface buttons put their last part on a second line
@@ -955,6 +964,248 @@ the compact layout and the fill below are the defaults (decision 14).
     - **Compat**: the goldens (`test_compat_032`) are untouched and pass. Point rows draw pixel-identically to 0.3.5
       (before / after renders of the six old shapes with explorations, sheets and previews, standard and compact, 100
       and 300 dpi: identical). No settings version step; opening a project writes nothing.
+
+## Decisions from the user (2026-10-10, version 0.3.7: option popups, grid lines None, Fill sheet under Elevations, the Sheet row)
+
+28. **Explorations' options as four buttons with popups, Plotted as a checklist, grid lines None, Fill sheet and Room
+    below lowest under Elevations, Distances under Scale, and the Sheet row Size | Format with a check box per sheet
+    size** (`ui/widgets.py`, `ui/dock.py`, `ui/point_rows.py`, `ui/problems.py`; `core/model.py`, `render/figure.py`,
+    `render/notes.py`). His answers of 2026-10-10 on rounds 6 and 7 of the panel mockup ("1 yes 2 yes move them 3
+    yes"; explanations on hover for Off, Below and Both; Distances into Scale; Size, Format and Printers take in one
+    row, and "do we need Printers take?"; no Checks drop-down in Depths), then his amendment after round 7, drawn in
+    round 8 and confirmed: **Printers take goes, the Size drop-down does it all** (D1-D9 of the build). Settings
+    version 7 unchanged: one new value ("none") of two existing keys, and the Size list writes the two existing sheet
+    keys. Supersedes the Explorations, Scale & sheet and Sheet style › Grid layouts of decision 27 (the "ui" section
+    below follows it).
+    - **Options: four buttons** (D1; `widgets.OptionButton`, `OptionGrid`): Explorations has the subsections Layers
+      and **Options** (`options_sub`), a 2 × 2 grid (`opt_grid`) of All layers, Depths, Water & screens and Plotted
+      (`opt_all`, `opt_depths`, `opt_water`, `opt_plotted`; `OPT_TITLES`), `OPT_GAP` 6 px apart both ways (142 px
+      each at a 340 px dock), one column while a title would be cut (half the width less 6 px narrower than the
+      widest button's size hint: the 260 px dock). A button (`OPT_H` 42 px, corners `OPT_RADIUS` 5) is its title
+      (11.5 px DemiBold) over **a one-line muted summary of its settings** (10.5 px, elided "…") and a small chevron;
+      open (its popup showing), the band's `row_open` fill and `band_line` outline, a 3 px `row_rail` inner left
+      edge and the chevron up. Its tooltip is what it holds (`OPT_TIPS`: "Within, labels and label text, for every
+      layer", "Depth lines, TD labels and where tops come from", "Screens, water levels and what is printed beside
+      them", "Every exploration on this section: untick one to leave it off") over the full summary. It takes the
+      focus by Tab only (a click never moves it); Space, Return and Enter open it; it has no button text ("Water &
+      screens" would make a mnemonic): the title is its accessible name, the summary its description. The summaries
+      (pure functions of dock.py, set by `_sync_option_summaries` on every change of `tolerance`, `label_dir`,
+      `label_text`, `top_mode`, `wl_label`, `depth_line`, `td_label`, `screens` and a Plotted tick, and after
+      `apply_settings`, every build, `_fail` and `project_cleared`): `all_layers_summary` "150 ft · vertical · name
+      only" (horizontal; name + offset), `depths_summary` "line · TD · table, else LIDAR" ("no TD"; `TOPS_WORDS`:
+      "LIDAR", "table only"; "no line" without the depth line), `water_summary` "drawn · elevation beside"
+      (`BESIDE_WORDS`: "nothing beside", "elev. + date beside"; "off"), `plotted_summary` "15 of 16 · 1 off", "16 of
+      16 · all shown" ("none" when the rows choose nothing, "–" before a build). Qt draws the 10.5 px summary at
+      11 px, so it elides a few letters before the mockup's. Verbose hint under the grid (`options_hint`): "Each
+      button opens its options. A second click, ✕, Esc or a click anywhere else closes them."
+    - **The popups** (D2; `widgets.OptionPopup`, `_ShadowPlate`; `dock.pop_all`, `pop_depths` = `grp_depth`,
+      `pop_water` = `grp_screens`, `pop_plotted`): under its button, as wide as the grid, painted as one shape, a
+      `row_open` box (corners `POP_RADIUS` 6) with a 1 px `band_line` outline joined to a notch whose apex touches
+      the button's bottom edge over its centre (`NOTCH_H` 7, `NOTCH_HALF` 7); a header (the title, 12 px DemiBold;
+      Plotted's count and Show all; the ✕, `_PopClose`, 20 px, tooltip "Close (Esc)", reached by Tab), a
+      `field_line` rule and the body (margins 10, 9, 10, 11; Plotted's 8, 7, 8, 9). Its soft shadow (blur 24, offset
+      0, 6, the check card's colours) is a plate of its own under the box, transparent to the mouse, so no graphics
+      effect lies over the fields he types in. **One is open at a time. It closes on** a second click on its button,
+      the ✕, Esc, a press anywhere else (which still does its job: another option button opens in one click, a field
+      elsewhere takes the click), its section closing, `collapse_all` (so a project loaded or cleared), the dock
+      hiding and `cleanup`; **never** on the pointer leaving (he types in it), a scroll or a switch to another
+      application. A press on the popup's own area (its title, a field name, beside the notch) is its own. The press
+      rule is an application event filter (`_PressWatcher`), installed only while a popup is open and removed on
+      every close, that tests the event type first; "inside" follows `parentWidget()` across windows
+      (`widgets._within`; `isAncestorOf` stops at windows), so a drop-down list or a context menu opened from the
+      popup is inside. A press or drag on the panel's own scroll bar keeps it open (`OptionGrid._scrolls_overlay`:
+      the popup scrolls with the content, as with the wheel); another scroll area's bar is a press elsewhere. **Esc**
+      closes it only while no drop-down list or menu is open and the focus is in the panel's content or on the
+      scroll area around it (a click on a button leaves Qt's click focus there); it is then kept from QGIS's
+      shortcuts (its ShortcutOverride accepted); Esc on the map (cancelling Draw) is never taken. A keyboard open
+      puts the focus on the popup's first field; a close with the focus inside puts it back on the button.
+      **Why a child of the panel's content (`self.content`), not a window**: it scrolls with the panel and stays on
+      its button, lies over the sections below as the mockup's does, is clipped to the panel and grabs nothing (a Qt
+      popup window would take the click that closes it and open it again, and is fragile offscreen). While open it
+      follows the grid (a filter on the grid's ancestors below the content: Move, Resize, LayoutRequest, a
+      ParentChange; the content's Resize) and its own height (its LayoutRequest: a hint shown, the list refilled);
+      its plate and itself are raised on every open (sections built after them are later siblings). Its height is
+      its `heightForWidth` at the grid's width when it has one (a word-wrapped hint inside; else its size hint),
+      measured after its posted LayoutRequests are sent (`widgets._flush_layouts`, three bottom-up sweeps: a pair
+      that restacks for the width settles first); the content's minimum height grows to the popup's bottom +
+      `POP_ROOM` (8 px) while the popup would run past the content's own height, never below it, and is given back
+      on close. A popup opened near the bottom of the view scrolls into it (`dock._show_popup`, after the open:
+      `ensureWidgetVisible(pop, 0, POPUP_VIEW_MARGIN)`, 8 px); one taller than the view (a short dock) gets its top
+      8 px into the view (Qt centres it and cuts off its header); one already whole in the view stays put.
+    - **What they hold** (every attribute name kept): All layers (Within | Labels; Label text; the Verbose
+      `within_hint`); Depths (Depth line, TD label; Tops from; then **0 means missing and "Ignore a table top off
+      LIDAR by over [25 ft]" in the popup itself, no Checks pill** (D4; the label carries the box's tooltip, the box
+      `TOP_MAX_DIFF_W` 70 px, 76 before, so the label keeps to one line in the 268 px body of a 340 px dock with its
+      scroll bar and "9999.0 ft" still shows whole); the Verbose `depth_readout`); Water & screens (Draw them | Print
+      beside in equal halves: 0.3.6's 5 : 4 stacked in the popup; `screens_readout`); Plotted (below). Tops from is
+      an `ElidedComboBox` keeping its own tooltip (`setLeadTip`: "Where each exploration's top comes from (all
+      layers)", the full item text added under it while the box cuts it, at 260 px). `explo_readout` stays the
+      section's last line.
+    - **Plotted is a checklist** (D3; `point_rows.PlottedList`, the Plotted popup's content, no heading of its own):
+      a group per layer (its title 9.5 px bold capitals), a row per exploration in station order: the check box, the
+      name (DemiBold; struck through and muted when left off) and at the right the detail "300 ft · 40 ft L · S"
+      (10.5 px, muted; `dock._plotted_detail` adds the direction of projection, decision 26; none for one on the
+      line). Unticking leaves it off this section line, as before (`Settings.hidden_points`). In the header,
+      `count_label` "N of M" (a QLabel `xsPopCount`, shown whenever there is a model, whatever Verbose is) and Show
+      all; the old title "Plotted explorations (N of M, K left off by you)" (`text()`) is the tooltip of the count
+      and of the popup's title. The list is at most `PLOTTED_MAX_H` 252 px tall (210 before), scrolls by pixel and
+      **keeps its scroll position** when the rebuild after a tick refills it; its Verbose hint "Untick one to leave
+      it off this section only." sits under it. The core's "(see Plotted explorations)" reads "(see Explorations ›
+      Plotted)" in the status line (`problems.OLD_PLACES`; the core is unchanged).
+    - **Grid lines None** (D5). Core: `model.GRID_STYLES = SURFACE_STYLES + ("none",)` (the grid's styles only: a
+      surface's "none" is still cleaned to solid); `clean_sheet_style` and `grid_spec` keep it; the presets never
+      hold it; `model.grid_drawn(s)` is (majors drawn, minors drawn). Render (`figure._Painter.grid()`, which
+      `draw_page` and `draw_preview` both call: sheets, tiles, the preview, PDF, PNG and SVG): a None set adds no
+      line. **A None major leaves a uniform minor grid** (minors at every minor multiple, the major positions
+      included: no gap every inch); a None minor leaves the majors alone. In the preview, minors too close to tell
+      apart are thinned in 1-2-5 steps under a None major instead of dropped (0.3.6 drops them where it thins the
+      majors), so the preview never shows an empty frame where the sheet has a grid. Any other style takes exactly
+      the 0.3.6 path (the goldens). The frame, ticks, axis numbers, end letters, match lines, the elevation range,
+      the fill and the tiling use the grid's spacing, never its style: with both None the sheet has no grid and
+      keeps its frame, ticks and numbers. The notes name only the lines drawn (`notes._grid_words`, used by
+      `note_texts` and `compact_notes`, so the plan sizes the block for the text it gets): byte-identical "GRID 1 in
+      major, 0.1 in minor (1,000 × 50 ft; 100 × 5 ft)" with both, "GRID 0.1 in minor (100 × 5 ft)" or "GRID 1 in
+      major (1,000 × 50 ft)" with one, no GRID part with neither (compact line 1, one part shorter, may then keep the
+      sheet name). 0.3.6 reads "none" as solid (accepted). Panel: Sheet style › Grid › Custom's Line is Solid |
+      Dashed | Dotted | **None** (`GRID_LINE_STYLES`; None a text button, tooltip "No lines", the others their icons);
+      a None part's colour and width are disabled and its swatch drawn dimmed (`dock._GridColorButton`: the live
+      swatch at `GRID_DIM_OPACITY` 0.38, the mockup's dimmed cell; QGIS's disabled swatch is a flat light gray that
+      on a dark panel read as a pale colour in use); the legend line `grid_info` shows under Custom too, "Major:
+      dashed · Minor: none" (`GRID_STYLE_WORDS`, `_grid_custom_text`) and "Major: none · Minor: none · no grid"; under
+      Green or Gray it is the preset's line, as before. The Custom table is `dock._GridTable`: the label, colour and
+      width columns at least 36, 32 and 70 px (`COLS`; 40, 38, 70 before), the Line column the rest (134 px at a
+      340 px dock: four whole buttons); where a Line control does not fit beside the width (the 260 px dock) each
+      goes on a row of its own under its part, full width, and the "Line" heading hides. The chip still says
+      "Custom grid".
+    - **Fill sheet and Room below lowest under Elevations** (D6; `dock.z_auto_row`): Scale & sheet › Elevations shows
+      **Room below lowest | Fill sheet** (`below_in`, "Below lowest" renamed; `fill_grid`; the same settings) and its
+      Verbose hint (`z_auto_hint`: "Auto picks the range from your data plus the room below. Fill sheet turns the
+      paper left over into whole grid squares.") **only under Auto**; Manual shows Lowest | Highest in their place.
+      Their tooltips, his: `FILL_TIPS` "Off: leave the paper left over on the sheet blank.", "Below (the default):
+      fill the paper left over with whole grid squares under the section, down to the margin. Room to draw the
+      geology deeper.", "Both: fill it with grid squares above and below the section, the larger half below.";
+      `FILL_TIP` (Fill sheet's label) "What to do with the paper left over on the sheet"; `ROOM_TIP` (the label and
+      the box) "Grid kept under the lowest point (the lowest bottom or TD label), in paper inches". A custom page
+      disables Fill sheet and its buttons and box read `FILL_CUSTOM_TIP` "Not used with a custom page size: the page
+      is cut to the drawing", as Orientation does; a sheet gives their own back. `below_in` and `fill_grid` keep
+      0.3.6's enabled rules. **`STYLE_KEYS` drops `fill_grid`**: the Sheet style chip no longer counts the fill.
+    - **Distances under Scale** (D7): Feet | Stations (`distance_labels`), full width under Horizontal | Vertical,
+      the label's tooltip `DISTANCES_TIP` "How distances along the line are written: 1,250 ft, or as stations
+      12+50", the buttons' "Distances in feet: 1,250" and "Distances as stations: 12+50" (`DISTANCE_TIPS`). The
+      "Distances & printers" pill (`distances_more`) and the Checks pill (`checks_more`) are gone: Units & datum is
+      the only pill (`_disclosures == [units_more]`).
+    - **The Sheet row and the Size list** (D8 with the amendment): Scale & sheet › Sheet starts with **Size |
+      Format** in equal halves (`sheet_row`, a `pair`), both eliding with "…" (`widgets.ElidedComboBox`: a Fusion
+      combo clips its text; it paints the text elided to its edit field, its tooltip is the item's ToolTipRole or
+      its text, its open list is as wide as its widest item, up to 360 px; `_combo(..., elide=True)`), so the row
+      never stacks; Format's tooltip is its text ("PDF (vector)"). **Printers take is gone** (the `allowed_sheets`
+      QgsCheckableComboBox and `SHEET_CHOICES`; both settings keys stay). **Size** (`sheet`, a
+      `widgets.SheetSizeCombo`) opens a list with **a check box per sheet size**: Letter 8.5 × 11 in, Tabloid 11 ×
+      17 in, ANSI C 17 × 22 in, ARCH C 18 × 24 in, ANSI D 22 × 34 in, ARCH D 24 × 36 in (`SIZE_ITEMS`: the name and
+      the muted `SIZE_DETAIL`), a rule, **Custom** "cut to the drawing" (`SIZE_CUSTOM`, exclusive: checking it
+      clears the sizes, checking a size clears it) and a muted foot line, "Several: the smallest that fits · One:
+      just that · None: Letter" (`SIZE_FOOT`). Several checked: the smallest that fits among them (0.3.6's Smallest
+      that fits over them, tiling on the largest); one: just that sheet; none: Letter. The closed box (`size_text`)
+      reads "Tabloid" (tooltip "Tabloid only"), "Letter or Tabloid" ("Letter or Tabloid: the smallest that fits"),
+      "Smallest of 3 sizes" ("Letter, Tabloid, ANSI D: the smallest that fits"), "Custom" ("Custom: the page is cut
+      to the drawing") or, none checked, "Letter" ("Nothing checked: Letter"); the field's label has `SIZE_TIP`
+      "Check several: the smallest that fits. One: just that sheet. None: Letter." The list (`widgets._SizeList`)
+      is a frameless Popup window of its own, like any drop-down's list (its parent the combo, so the panel's
+      stylesheet reaches its inner frame `xsSizeList`: a stylesheet gives a window itself no background), at least
+      `SIZE_LIST_W` 220 px wide, rows of `SIZE_ROW_H` 24 px with the hover fill (a click anywhere on a row toggles
+      its box), opened 2 px under the combo or above it when the screen has no room below (on a screen too short for
+      either, on the side with more room, kept on the screen), the focus on the first box (Tab between them, Space
+      toggles). It stays open while he checks and closes on Esc, Return, a press outside it, or a press on the box
+      again, which does not reopen it (`WA_NoMouseReplay`, as Qt's own combo list does). The combo holds no items
+      (`count()` 0); `checksChanged`, once per change, saves and rebuilds. Not a `QgsCheckableComboBox`: its closed
+      text is "Letter, Tabloid", and it has no exclusive item and no foot line. **No new settings** (dock.py's pure
+      `sheet_from_checks` / `checks_from_sheet`): several -> `sheet` "smallest" with `allowed_sheets` the checked
+      (in size order); one -> that sheet with [it]; none -> "letter" with ["letter"]; Custom -> "custom" with the
+      default ["letter", "tabloid"] (unused by a custom page). Old projects open as their keys say: Smallest of
+      Letter and Tabloid (the default) -> both checked, "Letter or Tabloid"; a fixed sheet with any allowed list ->
+      that sheet alone (written back as [it] on his next change: the same drawing, `plan()` trying only that sheet
+      either way); Smallest over a list that names no known sheet -> Letter and Tabloid, as `scales.plan` reads it;
+      Custom -> Custom. `scales.plan` is unchanged, so every stored form draws as 0.3.6 drew it. `_update_enabled`
+      takes the custom page from `sheet.isCustom()` (Orientation and Fill sheet).
+    - **Long tooltips wrap** (0.3.7 finish; `widgets.wrap_tip`, `tip_text`). Qt shows a plain-text tooltip on one
+      line (Fill sheet's Below was 747 px wide) and wraps a rich-text one, unless its width is set, at about a third
+      of its length. A 0.3.7 tooltip whose longest line is wider than `TIP_MAX` 320 px in QToolTip's font becomes one
+      cell of a table `TIP_W` 240 px wide (the words unchanged, & < > escaped, its lines kept): Below and Both, Room
+      below lowest's (label and box), the custom page's Fill sheet text, Size's label and the closed box's tooltip,
+      Distances' label and the preview's Full screen. Off (260 px) and the shorter ones stay plain text. The tests
+      compare `tip_text()`, the text again.
+    - **The re-entrancy fix** (0.3.7 fix; `tests/test_app_stylesheet.py`). QGIS's Night Mapping and Blend of Gray
+      themes set a stylesheet on the whole application (`QgsApplication.setUITheme`). Under it a widget's own
+      `setStyleSheet` re-polishes it, and the polish sets its palette: a PaletteChange. **What looped**: 0.3.6's check
+      card answered every PaletteChange by setting its stylesheet again (`CheckCard.changeEvent` -> `_apply_theme`
+      -> `setStyleSheet` -> PaletteChange -> `changeEvent` ...) until Python's stack overflowed: building the panel
+      under either theme crashed (offscreen: exit 127). **The guard**: `_apply_theme` sets the stylesheet only when
+      its text changes, and `changeEvent` leaves alone the PaletteChange its own `setStyleSheet` brings
+      (`_in_theme`, as the dock's `_apply_theme` already had); the Size list's own stylesheet (below) keeps the same
+      two rules. The test builds the dock and the preview under each theme through QGIS's own `setUITheme`, opens
+      everything and switches themes and palettes at runtime, counting every `changeEvent` and `_apply_theme` of
+      `xsections.ui`: none runs inside itself, no change is answered by the same change again and again, and once
+      settled no theme event keeps coming.
+    - **What the themes show** (0.3.7 finish, the review of that fix on 2x grabs): his Night Mapping panel is
+      pixel-identical but for the last two points.
+      - The check card's wrapped labels keep their height for width (`CheckCard._label` builds its size policy
+        with `setHeightForWidth`: a new policy drops the flag `setWordWrap` set, and since the fix no re-polish gives
+        it back). Without a theme the card was sized by its size hint, 15 px too tall, and a three-line title lost
+        its last line.
+      - Blend of Gray's text #0e0e0e (its window #727272 is dark enough for the dark tokens) read 1.2:1 on the
+        panel's dark surfaces. `theme_for` takes `DARK_INK` #e3e9ec (the mockup's dark ink) as `ink` when the
+        palette's Text is under `MIN_INK_CONTRAST` 4.5:1 on the open body or the check card (`own_ink`); `field_ink`,
+        the text on a field (segmented, tool and card buttons, the symbol list, the style chips, the CSV preview),
+        stays the palette's Text where that reads better on the field (Blend of Gray's dialogs, their fields
+        #b2b2b2); the dock's plain labels and check boxes, which that theme's stylesheet colours #0e0e0e, take `ink`
+        (`panel_stylesheet(t, plain_text=True)`, `_own_ink_rules`: the dock's only, not the dialogs'). Layer
+        names, tabs, popup titles, check boxes and the card read at 10:1 or better there now.
+      - The `:disabled` rules of the panel's labels and links set `background: transparent`: Night Mapping's
+        `QWidget:disabled` background painted a #323232 box behind each disabled field label (the Water tab's
+        Date). A dark palette's disabled text under `MIN_DISABLED_CONTRAST` 2.5:1 on the open band (Night
+        Mapping's #535353, 1.7:1) becomes `DARK_DISABLED` #777777 (2.9:1, a dark palette's own).
+      - The Size list sets its own stylesheet (`_SizeList._apply_theme`, `_size_list_rules`, as it opens and on a
+        palette change while open): under an application stylesheet the panel's rules gave it their colours but not
+        their box model, so the foot had no padding or rule and the box no border, the text edge to edge.
+    - **Compat**: the goldens (`test_compat_032`) untouched and passing. A sheet without a None line draws
+      pixel-identically to 0.3.6: the old and new `figure.py` and `notes.py` side by side, 297 renders (6 layouts and
+      scales, Green, Gray and the 9 custom solid / dash / dot pairs, every page and 3 preview sizes) matched in every
+      grid line and both notes texts. No settings version step; opening a project writes nothing.
+
+## Decisions from the user (2026-10-10, version 0.3.7: full screen for the preview)
+
+29. **Full screen for the preview** (`ui/preview.py`, `plugin.py`). The user, 2026-10-10: "add a full screen toggle
+    button on the cross section. Sometimes I want to quickly look at the section full screen then re-dock it. I'd
+    like the toggle to do that automatically for me." No settings version step: nothing is stored.
+    - **The button**: `PreviewWidget.act_full` "Full screen", checkable, the toolbar's last action after a separator
+      (after Readout row and Popup). Tooltip "Full screen: the section fills the screen; click again or press Esc to
+      put it back". QGIS 4.2.1 has no full-screen theme icon, so `full_screen_icon` draws one in the style of the
+      strip and popup toggles: a corner at each corner of a square, pointing out; checked (full screen), pointing
+      in. It uses the WindowText color and is drawn again on a theme change. It is checked while the preview is full
+      screen.
+    - **On** (`set_full_screen(True)`, only for a shown dock in a main window). The screen is the one under the
+      dock's middle (`QGuiApplication.screenAt`), taken before the dock floats. Where the dock was is kept in
+      `_DockPlace`: floating or docked, its area, its size across the area (a bottom dock's height, a side dock's
+      width), its floating geometry and its window state. Then `setFloating(True)` (Qt keeps its place in the area),
+      `setGeometry(screen.availableGeometry())`, `showFullScreen()`, raise, activate and focus the canvas, and fit.
+    - **Off** (`leave_full_screen`: the button again, or Esc). The window state and geometry come back. A dock that
+      was docked is docked again with `setFloating(False)` (added at the end of its area if Qt lost its place
+      there). Its size comes back with `QMainWindow.resizeDocks`, corrected for the tab bar when it sits in tabs. A
+      dock that was floating floats at its old geometry. Then fit.
+    - **Never lost**. Closed (Alt+F4) or hidden (the plugin's button) while full screen, the dock is put back into
+      its area hidden and gets its size at its next show. Its Hide and Show events are looked at once they are done,
+      with a zero-time timer. Since a hidden dock gets no Resize events, it is sent one, so QDockWidget records where
+      it floats next; floated by hand later, it lands where it floated before, not over the whole screen. The main
+      window's Close event (QGIS quitting), `QgsProject` cleared (also the first step of quitting: fileExit, then
+      closeProject, runs before aboutToQuit saves `UI/state`) and the plugin's `unload()` all call
+      `leave_full_screen` first. QGIS's Toggle Panels Visibility (Ctrl+Tab, `QgisApp::toggleReducedView`) hides only
+      visible docked panels, not floating ones: the full-screen preview stays, and the panels behind it go and come
+      back.
+    - **Keys**: F11 stays QGIS's. Esc is a window shortcut of `act_leave_full` only while the preview is full screen,
+      and the canvas takes it (ShortcutOverride) only then; docked, Esc stays QGIS's (a map tool's cancel, say). 0,
+      + and - keep working.
+    - **Not stored**: the preview never starts full screen. A preview the user floated by hand still comes back
+      floating from QGIS's saved window state, like any panel.
 
 ## Real data the user works with (copies for tests, never touch originals)
 
@@ -1076,15 +1327,22 @@ class StyleItem(key, label, color, on=True)      # one legend item with a symbol
 class LayerStyle(kind="none", field="", name="", items=[])   # a point layer's style as read (items in legend order)
 # Hit.style_rank (index in its row's LayerStyle.items, -1: no symbol, drawn black); Hit.color (a Color hit's colour,
 # "" without a symbol); PointLayerInfo.style (Color rows: the LayerStyle as built; PointLayerInfo.color "" for them)
-GRID_CHOICES = ("green", "gray", "custom"); GRID_STYLES = ("solid", "dash", "dot")
+GRID_CHOICES = ("green", "gray", "custom"); GRID_STYLES = SURFACE_STYLES + ("none",)   # ("solid", "dash", "dot"),
+                                                 # and since 0.3.7 "none" (decision 28: that set of lines not drawn)
 GRID_PRESETS = {"green": (("#5f9a72", 0.7, "solid"), ("#a8c8b2", 0.35, "solid")), "gray": ...}   # (major, minor)
 GRID_W_MIN, GRID_W_MAX = 0.1, 3.0
 DEPTH_LW_BLACK, DEPTH_LW_COLOR = 0.75, 1.6       # pt: Black and Gray rows | Color rows
 DEPTH_LW_LIMITS = {"depth_lw_black": (0.25, 3.0), "depth_lw_color": (0.25, 4.0)}
 # Settings: grid_color (green | gray | custom), grid_major_color / _width / _style, grid_minor_..., grid_custom_used,
 #           depth_lw_black, depth_lw_color (all flat scalars; data_color is gone)
-def grid_spec(s) -> ((major colour, pt, style), (minor ...))   # a preset's, or the cleaned custom keys
+def grid_spec(s) -> ((major colour, pt, style), (minor ...))   # a preset's, or the cleaned custom keys ("none" kept)
 def depth_widths(s) -> (black and gray pt, color pt)            # clamped to DEPTH_LW_LIMITS, else the defaults
+# core/model.py (0.3.7, decision 28): grid lines None, pure (no settings version step)
+def grid_drawn(s) -> (bool, bool)                # (majors drawn, minors drawn): False for a set whose style is "none"
+# Settings.grid_major_style / grid_minor_style: solid | dash | dot | none (the presets never "none"; a surface's
+# "none" is still cleaned to solid: clean_surface checks SURFACE_STYLES); Settings.sheet / allowed_sheets: the panel
+# writes them from its Size list (dock.sheet_from_checks): several sizes checked "smallest" + those, one "<it>" +
+# [it], none "letter" + ["letter"], Custom "custom" + ["letter", "tabloid"]; any stored pair still plans as before
 # core/model.py (0.3.5, decision 25): page orientation, pure
 ORIENTATIONS = ("auto", "landscape", "portrait")    # Settings.orientation, after `sheet` (default "auto")
 def clean_orientation(value) -> str                 # one of ORIENTATIONS (case and spaces ignored), else "auto"
@@ -1238,6 +1496,8 @@ Rules in `plan()`:
   the margins of `margins()`.
   `sheet == "smallest"`: first of `allowed_sheets` (in size order) that fits, landscape then portrait.
   Named sheet: that sheet, landscape then portrait. `custom`: page = need rounded up to 0.25 in, min 8.5 x 5.5.
+  (Since 0.3.7 the panel's Size list writes several checked sizes as "smallest" over them, one as that sheet, none
+  as Letter: decision 28; `plan()` is unchanged.)
   (That is `orientation` "auto"; "landscape" or "portrait" tries only that orientation, here and for tiling;
   a custom page ignores it: decision 25.)
 - Does not fit and `tile` is on: tile horizontally on the largest allowed sheet (or the named one), landscape,
@@ -1275,6 +1535,12 @@ def draw_swatch(fig, model, settings, entry, x, y) -> None  # one legend swatch:
 # draw_preview lays the brackets out at its own scale (_Painter._area_frame -> scales.AreaFrame) and grows its band
 # above the frame when needed. AREA_Z 5.5, AREA_EDGE_Z 2.6; gids AREA_GID "xsections-area", AREA_EDGE_GID,
 # AREA_LABEL_GID, AREA_LABEL_HALO_GID, LEGEND_AREA_GID "xsections-legend-area", LEGEND_SYMBOL_GID
+# 0.3.7 (decision 28): _Painter.grid() draws no line for a set whose style is "none"; a None major leaves the minors
+# at every minor multiple (the major positions too; the preview thins them 1-2-5 instead of dropping them); every
+# other style takes the 0.3.6 path
+# render/notes.py (0.3.7, decision 28): _grid_words(plan, settings) -> (words, spans) of the drawn sets only, used by
+# note_texts and compact_notes: "GRID 1 in major, 0.1 in minor (…; …)" as before with both, "GRID 0.1 in minor (…)"
+# or "GRID 1 in major (…)" with one, no GRID part with neither; grid_text unchanged
 # render/export.py
 def export(model, settings, plan, path: str, fmt: str = "pdf", dpi: int = 300) -> list[str]
     # pdf: one file, one page per sheet (PdfPages), then pdfprefs.add_print_prefs
@@ -1299,7 +1565,9 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   and line: solid, dashed (4 pt on, 2 pt off) or dotted (0.6 pt on, 1.6 pt off, round caps), the patterns
   absolute on paper (`GRID_DASH_PT`, divided by the width because matplotlib scales them with it), starting
   again at each line's start. Solid lines are drawn exactly as before (`solid_capstyle="butt"`, minor z 0.5,
-  major z 0.6). Frame 0.9 pt black, whatever the grid.
+  major z 0.6). Frame 0.9 pt black, whatever the grid. Since 0.3.7 (decision 28) a Custom line can be None: that
+  set is not drawn; a None major leaves a uniform minor grid (the major positions too); both None: no grid, the
+  frame, ticks and numbers stay; the notes name only the lines drawn.
 - Ground: 1.1 pt black, broken at nodata; each gap has a dotted link between its edges and a small
   "NO DEM DATA" note under it. Optional light fill below ground drawn under the grid. Drawing order:
   top-to-bottom lines (3.5) < TD halo (4.4) < ground (4.45) < TD text (4.5) < ticks < labels < match notes.
@@ -1367,7 +1635,8 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   1. "HORIZONTAL 1 in = 1,000 ft (1:12,000), 10 scale · VERTICAL 1 in = 50 ft (1:600), 50 scale ·
      VERTICAL EXAGGERATION 20× · GRID 1 in major, 0.1 in minor (1,000 × 50 ft; 100 × 5 ft) · SHEET Letter 11 × 8.5 in, landscape"
      (engineer's scale face = k in {10..60} with scale/k in {0.1, 1, 10, 100, 1000}; omit if none,
-     so 1 in = 5 ft names the 50 scale)
+     so 1 in = 5 ft names the 50 scale; since 0.3.7 the GRID part names only the lines drawn, "GRID 0.1 in minor
+     (100 × 5 ft)" under a None major, and is left out when both are None: decision 28)
   2. "Ground: {dem name} ({datum}), sampled every {step} ft. Explorations within {tol} ft of the section
      line are projected perpendicular onto it." (+ "Labels give the distance and direction each exploration was
      projected onto the section line." only if offsets are labelled, decision 26; the explorations sentences only
@@ -1398,23 +1667,28 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   The readout strip is compact since 0.3.4 (decision 23): one row of equal tiles (about 45 px) down to a 700 px
   preview, the first tile "760 ft from A" over the cursor's elevation and depth, "Ground", then each surface;
   numbers never cut, labels, details and names with "…".
-- Panel sections (0.3.6, decision 27, the approved panel mockup; before: decisions 17 and 22). `ui/widgets.py`
-  holds the visual system: `CollapsibleSection` (a `SectionHeader` tile or bar with its summary chip and amber
-  count chip, a `SectionBody` on its navy rail that paints the open cards' Flare bands), `Subsection` /
-  `SubsectionHeading`, `field_label`, `pair` and `checkbox_grid` (they stack in a narrow panel), the pills
+- Panel sections (0.3.6, decision 27, the approved panel mockup; before: decisions 17 and 22; 0.3.7, decision 28).
+  `ui/widgets.py` holds the visual system: `CollapsibleSection` (a `SectionHeader` tile or bar with its summary chip
+  and amber count chip, a `SectionBody` on its navy rail that paints the open cards' Flare bands), `Subsection` /
+  `SubsectionHeading`, `field_label`, `pair` and `checkbox_grid` (they stack in a narrow panel), the pill
   (`Disclosure`), `LayerCard` (+ `link_cards`, `paint_flare`), `RowTabs`, `Hint` / `Readout` and Verbose, the check
-  badge, card and host, the swatches, `SegmentedControl` with the QComboBox API the code uses, `theme_for` (the
-  mockup's light and dark tokens) and `panel_stylesheet`. Top to bottom: Line (Layer | Feature; Pick, Draw,
-  Selected; Ends A to A′, Reverse, Save to layer), Surfaces (the Ground card with the DEM and band, a card per
-  other surface, + Surface, + Bands…, + MODFLOW 6…; the Units & datum pill), Explorations (Layers: the exploration
-  rows, + Add layer; All layers: Within | Labels, Label text; Depths: Depth line, TD label, Tops from, the Checks
-  pill; Water & screens: Draw them, Print beside Off | Elev. | + date; Plotted), Other features (its rows of point,
-  line and polygon layers, + Add layer), Scale & sheet (Scale: Horizontal | Vertical; Elevations: Auto | Manual,
-  Split across sheets, Lowest | Highest under Manual; Sheet: Size | Format, Orientation Auto | Landscape | Portrait
-  (off for a custom page: decision 25), Title, the Distances & printers pill), Sheet style (Grid: Look Green | Gray
-  | Custom, Spacing from the scale and the spacing when unticked, Fill sheet | Below lowest; Depth lines: Black &
-  gray | Color, Reset; Page: Printer edge, Compact layout, Notes, Bend lines, Shade below ground). Several may be
-  open at once; all closed when the dock is created, reopened, or a project is loaded or cleared; never saved. A
+  badge, card and host, the option buttons and their popups (`OptionButton`, `OptionPopup`, `OptionGrid`, 0.3.7),
+  `ElidedComboBox` and `SheetSizeCombo` (the Size list, 0.3.7), the swatches, `SegmentedControl` with the QComboBox
+  API the code uses, `theme_for` (the mockup's light and dark tokens) and `panel_stylesheet`. Top to bottom: Line
+  (Layer | Feature; Pick, Draw, Selected; Ends A to A′, Reverse, Save to layer), Surfaces (the Ground card with the
+  DEM and band, a card per other surface, + Surface, + Bands…, + MODFLOW 6…; the Units & datum pill), Explorations
+  (Layers: the exploration rows, + Add layer; Options: the buttons All layers, Depths, Water & screens and Plotted,
+  each with its summary, opening a popup: All layers Within | Labels, Label text; Depths Depth line, TD label, Tops
+  from, 0 means missing, Ignore a table top off LIDAR by over [25 ft]; Water & screens Draw them | Print beside Off |
+  Elev. | + date; Plotted the checklist, its count and Show all in the header), Other features (its rows of point,
+  line and polygon layers, + Add layer), Scale & sheet (Scale: Horizontal | Vertical, Distances Feet | Stations;
+  Elevations: Auto | Manual, Split across sheets, Room below lowest | Fill sheet under Auto, Lowest | Highest under
+  Manual; Sheet: Size (a check box per sheet size, and Custom) | Format, Orientation Auto | Landscape | Portrait (off
+  for a custom page: decision 25), Title), Sheet style (Grid: Look Green | Gray | Custom, the legend line, the Custom
+  table with Solid | Dashed | Dotted | None, Spacing from the scale and the spacing when unticked; Depth lines:
+  Black & gray | Color, Reset; Page: Printer edge, Compact layout, Notes, Bend lines, Shade below ground). Several
+  may be open at once; all closed when the dock is created, reopened, or a project is loaded or cleared (an open
+  option popup with them); never saved. A
   closed section is a solid tile, an open one the navy bar (#193340 light, #2f5a6f dark, fixed: no longer the
   palette's highlight). Under the scroll area the status line (a dot, the message or "Ready · …"), then the action
   bar: Refresh, ⋯ (Export points CSV…, Save line to layer, then Verbose, checkable), Export… The widgets start from
@@ -1450,10 +1724,12 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   `value()` writes back what it stored, with only the header applied. Filling in code is silent (`changed` only for
   the user's edits); a type list scans its layer when the row's layer or type field changes and on Refresh, never
   on a rebuild. `set_problems` (from the dock, `ui/problems.py`), `confirm_guess` (Looks right), `checksChanged`.
-  `PlottedList` (the Plotted subsection): "PLOTTED" with Show all in its heading, "N of M" beside it with Verbose,
-  the old title "Plotted explorations (N of M, K left off by you)" as its tooltip (`text()`); one group per row,
-  sorted by station, each entry "300 ft · 40 ft L", unticked ones struck through; the dock keeps the entries
-  (`_hidden`).
+  `PlottedList` (0.3.7, decision 28: the content of the Plotted popup, no heading): its `count_label` "N of M"
+  (shown with a model, whatever Verbose is) and `btn_show_all` sit in the popup's header, the old title "Plotted
+  explorations (N of M, K left off by you)" (`text()`) is their tooltip; one group per row (bold capitals), sorted
+  by station, each entry its check box, its name (DemiBold) and "300 ft · 40 ft L · S" (with the direction),
+  unticked ones struck through; at most `PLOTTED_MAX_H` 252 px, its scroll position kept across a refill; the dock
+  keeps the entries (`_hidden`).
 - **Drawn in and the style box** (0.3.4, decision 23; `ExplorationRow`): `look_seg` Black | Gray | Color (tooltips
   "Black, like your own explorations", "Gray, to set this layer apart", "Each exploration in its color in this
   layer's style in QGIS"), in `field_box("Drawn in", ...)`; no colour button (Other points rows keep theirs).
@@ -1487,19 +1763,22 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   `refresh_style()` on that layer's rows and schedules a rebuild only when one is visible and in Color; it
   never marks the settings as the user's (nothing is saved).
 - **Sheet style** (0.3.4, decision 23; `dock._build_style_group`, in the mockup's order; regrouped in 0.3.6,
-  decision 27, into the subsections Grid, Depth lines and Page):
+  decision 27, into the subsections Grid, Depth lines and Page; 0.3.7, decision 28: None, and the fill moved out):
   1. *Grid* › Look Green | Gray | Custom (tooltips "Green engineering pad (the default)", "Gray, for
      black-and-white printers", "Your own colors, widths and line styles");
-  2. under Green or Gray, `grid_info`, one muted line: a short line in the major colour, "Major 0.7 pt", one in
-     the minor colour, "Minor 0.35 pt", then "solid" (0.3.5: "solid · the default");
-  3. under Custom, `grid_custom_box`: a small table, columns Color / Width / Line, rows Major and Minor, with a
-     colour button each (no opacity, no menu), a width spin (0.1-3 pt, 2 decimals, 0.05 steps) and an icon-only
-     Solid | Dashed | Dotted control (`widgets.LINE_STYLE_ICONS`, 22 × 8 icons, accessible names Solid, Dashed,
-     Dotted); under it the Verbose hint "Major lines every inch, minor every tenth." ("Major and minor lines at
-     the spacing below." with the automatic grid off) and "Start from Green · Gray" at the right;
+  2. `grid_info`, one muted line, always shown: under Green or Gray a short line in the major colour, "Major
+     0.7 pt", one in the minor colour, "Minor 0.35 pt", then "solid" (0.3.5: "solid · the default"); under Custom
+     (0.3.7) the line styles in words, "Major: dashed · Minor: none" (+ " · no grid" when both are None);
+  3. under Custom, `grid_custom_box`: a small table (`dock._GridTable`, 0.3.7), columns Color / Width / Line, rows
+     Major and Minor, with a colour button each (no opacity, no menu; `_GridColorButton`, dimmed while its lines
+     are None), a width spin (0.1-3 pt, 2 decimals, 0.05 steps) and a Solid | Dashed | Dotted | None control (the
+     three icons, `widgets.LINE_STYLE_ICONS`, 22 × 8, accessible names Solid, Dashed, Dotted; None a text button,
+     tooltip "No lines", 0.3.7), a None part's colour and width disabled; at the 260 px dock each Line control on a
+     row of its own; under it the Verbose hint "Major lines every inch, minor every tenth." ("Major and minor lines
+     at the spacing below." with the automatic grid off) and "Start from Green · Gray" at the right;
   4. (0.3.6) *Spacing from the scale (1 in, 0.1 in)* (`grid_auto`) and, only while it is unticked,
-     `grid_spacing_row` (Horizontal, ft and Vertical, ft: major / minor), then Fill sheet Off | Below | Both |
-     Below lowest, all moved here from Scale & sheet and the old Sheet style rows;
+     `grid_spacing_row` (Horizontal, ft and Vertical, ft: major / minor), moved here from Scale & sheet (0.3.6's
+     Fill sheet | Below lowest went to Scale & sheet › Elevations in 0.3.7, decision 28);
   5. *Depth lines* (the subsection heading, Reset at its right: "Back to 0.75 pt and 1.6 pt"; the NEW badge is
      gone), then *Black & gray* (0.25-3 pt) and *Color* (0.25-4 pt) spins and the Verbose hint "Which layers are
      black, gray or in color is set for each layer, under Explorations › Drawn in."; the spins and Reset are
@@ -1510,9 +1789,9 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   fires after the old index is gone) unless the project has used Custom before (`grid_custom_used`); Green and
   Gray never change the custom widgets. "Start from Green / Gray" and Reset set their widgets quietly, then mark
   one user change (one save, one rebuild). The header chip: "Defaults" when every style key is at its default
-  (`STYLE_KEYS`: the grid choice, the two widths, shade, bends, layout, edge, notes, fill; the custom values only
-  count under Custom), else "Green grid" / "Gray grid" / "Custom grid", plus " · lines 1 / 2.25 pt" when the
-  widths are not 0.75 / 1.6. A fresh or cleared project starts from `Settings()`: Green, 0.75 / 1.6,
+  (`STYLE_KEYS`: the grid choice, the two widths, shade, bends, layout, edge, notes; the fill until 0.3.7; the
+  custom values only count under Custom), else "Green grid" / "Gray grid" / "Custom grid", plus " · lines 1 /
+  2.25 pt" when the widths are not 0.75 / 1.6. A fresh or cleared project starts from `Settings()`: Green, 0.75 / 1.6,
   `grid_custom_used` False; nothing is written to QgsSettings.
 - Section line: line layer combo + feature combo, **Pick on map**, **Draw on map**, **Use selected**,
   **Reverse**, end labels (0.3.6: Layer | Feature, Pick, Draw, Selected, then one Ends row: A to A′, Reverse,
@@ -1522,9 +1801,10 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
 - Map feedback (`QgsRubberBand`): section line, flat-cap swath (`buffer(tol, 8, Flat, Round, 2)`),
   plotted explorations and other points highlighted (not the ones left off); since 0.3.6 a line row's crossings
   too, as other points; polygon pieces are not highlighted. Cleared on unload.
-- Top-to-bottom line group (0.3.6: Explorations › Depths): [x] Depth line; [x] TD label (TD 50'); Tops from (Table,
-  else LIDAR at the exploration / LIDAR at the exploration / Table only); the Checks pill: 0 means missing, Ignore
-  a table top off LIDAR by over [25] ft. The Top elevation, Bottom elevation and Total depth fields (all optional)
+- Top-to-bottom line group (0.3.6: Explorations › Depths; 0.3.7: the Depths popup of Explorations › Options): [x]
+  Depth line; [x] TD label (TD 50'); Tops from (Table, else LIDAR at the exploration / LIDAR at the exploration /
+  Table only); 0 means missing, Ignore a table top off LIDAR by over [25] ft (0.3.6: under the Checks pill; 0.3.7:
+  in the popup itself). The Top elevation, Bottom elevation and Total depth fields (all optional)
   are in each row's Depths tab, with the Verbose hint "Top from the table, else LIDAR; bottom from the table, else
   top − depth."; and a sources readout ("Tops: 5 ExploElev, 3 LIDAR · Bottoms: 2 BotElev, 6 top − ExploDepth, 1
   none").
@@ -1547,8 +1827,9 @@ def add_print_prefs(path: str) -> bool    # /ViewerPreferences <</PrintScaling /
   …". Lowest | Highest are shown only under Manual (0.3.6; before, disabled in Auto, they showed the auto limits).
 - File errors (a PDF or CSV held open by another program) become a message-bar warning. Unreadable
   saved settings fall back to defaults value by value; a failed restore never half-loads the plugin.
-- The preview toolbar (decisions 20, 21): Fit, Zoom out, the zoom percent, Zoom in, Surfaces CSV…, and the
-  Readout row and Popup toggles. No Save: the preview is not to scale; files come from Export….
+- The preview toolbar (decisions 20, 21, 29): Fit, Zoom out, the zoom percent, Zoom in, Surfaces CSV…, the Readout
+  row and Popup toggles, and Full screen (0.3.7: the dock fills the screen it is on; again or Esc puts it back where
+  it was). No Save: the preview is not to scale; files come from Export….
 - **Export…**: file dialog (PDF/PNG/SVG; default name "Section A-A' H1000 V50.pdf"), then `export()`;
   message bar with the file path(s).
   **Save line to layer** (memory layer "XSections lines": start, end, h_scale, v_scale, tolerance).
@@ -1829,3 +2110,68 @@ from the dock, the status line, the bands, Other features rows of three kinds fr
 turns it on turns it off again (`addCleanup`). Existing tests were edited for the new texts and places only (names in
 sentence case, the shorter texts, Verbose turned on before a hint or readout is read, the six sections, the tabs
 instead of More, "Other features", `guessed` in the rows' key lists), each with its reason in the build reports.
+
+0.3.7 (decision 28). `test_grid_none.py` (14 tests) covers None in core and render: the constants, the cleaners
+keeping "none" (a surface's cleaned to solid), the presets, `grid_drawn`, the JSON and project round trips; sheets,
+page 2 of a tiled plan and the preview with (dash, none), (none, solid) and (none, none) (no line of a None set, a
+None major's minors at every minor multiple inside the frame, the major positions included, the spines and the tick
+texts as with (solid, solid); the preview at 1 in = 100 ft thinning, not dropping, the minors under a None major);
+SVG, PNG and PDF exports; the notes texts (both drawn byte-identical, one, none) and a standard plan of (none, none).
+`test_option_popups.py` (27) covers the widgets on their own, in a harness like the dock (a scroll area whose content
+holds a section, the grid and a sibling below it): the button's pixels, tooltip, eliding and focus; two columns or
+one; the popup under its button with its notch over the button's centre and its plate under its box, above the
+sibling; every way it closes and the ways it does not (a press inside, a combo's open list, Leave and a wait, the
+panel's own scroll bar), one at a time, no application filter left after any close; following the grid, the width
+and Verbose; the content's room; the paint in both themes; the keyboard; the Size list (silent and emitted checks,
+a click, the exclusive Custom, its place, rows, rule, foot and focus, Esc, a press outside, a press on the combo with
+`WA_NoMouseReplay`, a short screen); `ElidedComboBox` (eliding, tooltips, `setLeadTip`, the list's width); the
+stylesheet rules; budgets. `test_panel_037.py` (31) covers the dock: the places of every moved control and the gone
+ones, each popup from its button, closing on a Line header press, `collapse_all`, hide, a restore, a cleared
+project and `cleanup`, following an opened row and a scroll, a tall popup in a short dock, scrolling into view; the
+summaries (pure and live, a tick before and after its rebuild, a failed build); the Plotted checklist (count, fonts,
+detail with direction, 252 px, the scroll kept); the Depths popup without Checks; Scale & sheet (Distances, Auto and
+Manual rows, every tooltip, the custom page's grayed Fill sheet, the Sheet row at 340 and 260 px, the Size functions
+for every case, his clicks written to `settings()`, round trips, an old fixed-Tabloid project drawing the same pages,
+a real build with Letter, Tabloid and ANSI D checked); grid None in the panel (buttons, legend line, grayed and dimmed
+colour and width, round trips, presets, a preview without grid lines); `_GridTable` at 340 and 260 px; nothing cut
+at 260 and 340 px with each popup open (also in Segoe UI 9, skipped without it); the long tooltips wrapping in Qt's
+own tooltip window in Segoe UI 9 and `wrap_tip` / `tip_text` in any font; the status line's new place name;
+both themes. Existing tests were edited for the new places and texts only (rules S1 to S7 of the build spec: a
+control in its popup, the one pill, the subsections Layers and Options, a popup opened before `isVisible()`, "Room
+below lowest", the grid style lists with "none", `STYLE_KEYS` without the fill, the Plotted detail with its
+direction and `PLOTTED_MAX_H`, the Size list's `setChecks` instead of `setCurrentIndex`, `allowed_sheets` gone),
+each listed in the build reports.
+
+0.3.7 fix and finish (decision 28). `test_app_stylesheet.py` (8 tests) runs under QGIS's own `setUITheme` with the
+install's Night Mapping and Blend of Gray files, and with none (each skipped when this QGIS lacks it). The check card
+alone sets its stylesheet only when its colours change; the whole dock and its preview, docked in a main window,
+built and walked under each theme (every section, every row's editor and tab, every popup, the card, the Size list
+and a Symbol list, Verbose, palettes and themes switched at runtime with the card open and the preview full screen)
+with every `changeEvent` and `_apply_theme` of `xsections.ui` counted (`Recorder`: no nest past 8 is called; a loop
+fails the test instead of overflowing the stack). `CardHeight`: a card of a three-line title and long sources and
+notes opened by `CardHost` under each theme, every wrapped label exactly as tall as its text at its width.
+`Readable`: under each theme the real dock's text measured on grabs (a closed and an open row's name, the current
+tab, the Depths popup's title and a check box, the card's title and value: 4.5:1 or better), a disabled field label
+on no box (2:1 or better, dark), and the Size list's foot padding and box border. Each of these fails with its fix
+undone at runtime (the build reports). Edited for the wrapped tooltips: `test_panel_037` ScaleAndSheet's two tests
+and `test_preview_fullscreen` compare `tip_text()`.
+
+`test_preview_fullscreen.py` (21 tests, decision 29) runs a shown QMainWindow with the preview in a QgsDockWidget,
+as plugin.py sets it up, on the offscreen platform's one 800 x 800 screen. It covers:
+- the button: last on the toolbar, its text and tooltip, its icon pointing out and in, the theme's text color, no
+  shortcut while docked.
+- docked, full screen and back, at the same area and size. The bottom, a side area and tabs are covered, as are a
+  main window resized meanwhile and another panel docked meanwhile; the zoom, readout and hover work full screen;
+  floated by hand afterwards, the dock lands where Qt floated it before.
+- floating before: back at its geometry.
+- keys: Esc with the focus on the canvas or elsewhere in the window, Esc during a drag, + - 0 while full screen, F11
+  not taken, a main-window Esc shortcut still QGIS's while docked.
+- never lost: closed or hidden while full screen, with and without an earlier float by hand. The dock is docked again
+  hidden, comes back at its size next show, and floated by hand later lands where it floated before.
+- QGIS's Ctrl+Tab rule leaves it full screen.
+- the main window's close sees it docked.
+- the plugin's own wiring (qgis.testing's iface around a real main window): its button while full screen, a project
+  cleared, unload while full screen (docked when it is removed).
+- nothing stored.
+- two screens: a new Python on two offscreen screens (the platform's configfile) fills the screen the dock is on, not
+  the primary.

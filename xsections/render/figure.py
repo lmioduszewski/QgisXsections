@@ -506,20 +506,29 @@ class _Painter:
     # --- grid
     def grid(self) -> None:
         """The minor and major grid lines inside the frame, each set as one NaN-separated line: a preset's colours and
-        widths, or the Custom ones (grid_spec), solid, dashed or dotted with absolute dash lengths (GRID_DASH_PT)."""
+        widths, or the Custom ones (grid_spec), solid, dashed or dotted with absolute dash lengths (GRID_DASH_PT), or
+        (0.3.7) "none": that set is not drawn. A None major set leaves a uniform minor grid (minor lines at the major
+        positions too); the frame, the ticks and the axis numbers never depend on the style."""
         ax, p = self.ax, self.plan
         (maj_c, maj_w, maj_s), (min_c, min_w, min_s) = grid_spec(self.s)
         min_gap = 0.035 if self.preview else 0.0           # inches; preview drops lines that would merge
         for axis, lo, hi, minor, major, kk in (("x", self.x0, self.x1, p.h_minor, p.h_major, self.kx),
                                                ("y", self.z0, self.z1, p.v_minor, p.v_major, self.kz)):
-            maj_step = major * (_nice_mult(major * kk, min_gap) if min_gap else 1)
-            majors = _multiples(lo, hi, maj_step)
-            minors = _multiples(lo, hi, minor, skip=maj_step) if minor * kk >= min_gap and minor > 0 else []
-            if maj_step != major:
-                minors = []
+            if maj_s == "none":     # 0.3.7: no majors; the minors alone, uniform (the major positions too). The preview
+                #                     thins them as it thins majors (1-2-5 steps), so it still shows a grid (sheets:
+                #                     every minor, min_gap 0)
+                min_step = minor * (_nice_mult(minor * kk, min_gap) if min_gap else 1)
+                majors, minors = [], (_multiples(lo, hi, min_step) if minor > 0 else [])
+            else:                   # exactly the 0.3.6 lines (the goldens): majors, minors skipping them, and in the
+                #                     preview "majors thinned -> no minors"
+                maj_step = major * (_nice_mult(major * kk, min_gap) if min_gap else 1)
+                majors = _multiples(lo, hi, maj_step)
+                minors = _multiples(lo, hi, minor, skip=maj_step) if minor * kk >= min_gap and minor > 0 else []
+                if maj_step != major:
+                    minors = []
             for vals, (color, lw, style), z in ((minors, (min_c, min_w, min_s), 0.5),
                                                 (majors, (maj_c, maj_w, maj_s), 0.6)):
-                if not vals:
+                if not vals or style == "none":      # (0.3.7) GRID_DASH_PT has no "none": it would draw solid
                     continue
                 a = np.repeat(np.asarray(vals, float), 3)
                 a[2::3] = np.nan

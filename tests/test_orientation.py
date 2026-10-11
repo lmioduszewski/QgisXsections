@@ -374,8 +374,8 @@ class Panel(unittest.TestCase):
         seg = d.orientation
         self.click(seg, "portrait")
         for sheet in ("custom", "letter", "custom", "smallest"):
-            d.sheet.setCurrentIndex(d.sheet.findData(sheet))
-            custom = sheet == "custom"
+            custom = sheet == "custom"                      # (0.3.7: the Size list's check boxes)
+            d.sheet.setChecks(["letter", "tabloid"] if sheet == "smallest" else [sheet], custom=custom, emit=True)
             self.assertEqual(seg.isEnabled(), not custom, sheet)
             tips = [b.toolTip() for b in seg.buttons()]
             if custom:

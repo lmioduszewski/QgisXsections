@@ -346,7 +346,8 @@ class ToolbarTest(PreviewCase):
         pv = PreviewWidget()
         self.addCleanup(pv.deleteLater)
         names = [a.text() for a in pv.toolbar.actions() if a.text()]
-        self.assertEqual(names, ["Fit", "Zoom out", "Zoom in", "Surfaces CSV…", "Readout row", "Popup"])
+        self.assertEqual(names, ["Fit", "Zoom out", "Zoom in", "Surfaces CSV…", "Readout row", "Popup",
+                                 "Full screen"])                      # (0.3.7: tests/test_preview_fullscreen.py)
         for a in (pv.act_fit, pv.act_zoom_out, pv.act_zoom_in, pv.act_csv, pv.act_strip, pv.act_popup):
             self.assertFalse(a.icon().isNull(), a.text())
         self.assertIs(pv.toolbar.widgetForAction(pv.act_csv).toolButtonStyle(),

@@ -146,18 +146,18 @@ class Layout(PanelCase):
         self.assertEqual([s.objectName() for s in d.sections],
                          ["xsectionsLineGroup", "xsectionsGroundGroup", "xsectionsExplorationsGroup",
                           "xsectionsOtherGroup", "xsectionsExportGroup", "xsectionsStyleGroup"])
-        self.assertEqual([s.title() for s in subsections(d.grp_explo)], ["Layers", "All layers", "Depths",
-                                                                         "Water & screens"])
+        # (0.3.7: All layers, Depths, Water & screens and Plotted are the popups of Options' buttons)
+        self.assertEqual([s.title() for s in subsections(d.grp_explo)], ["Layers", "Options"])
         self.assertIsInstance(d.plotted, PlottedList)
         body = d.grp_explo.body_layout
-        self.assertEqual(body.indexOf(d.plotted), body.indexOf(d.grp_screens) + 1)
-        self.assertEqual(body.indexOf(d.explo_readout), body.indexOf(d.plotted) + 1)
-        self.assertEqual(d.plotted.heading.title(), "Plotted")
+        self.assertTrue(d.pop_plotted.isAncestorOf(d.plotted))
+        self.assertEqual(body.indexOf(d.explo_readout), body.indexOf(d.options_sub) + 1)
+        self.assertEqual(d.pop_plotted.title(), "Plotted")
         self.assertEqual([s.title() for s in subsections(d.grp_other)], ["Layers"])
         self.assertEqual([s.title() for s in subsections(d.grp_export)], ["Scale", "Elevations", "Sheet"])
         self.assertEqual([s.title() for s in subsections(d.grp_style)], ["Grid", "Depth lines", "Page"])
-        self.assertEqual((d.grp_depth, d.grp_screens), (subsection(d.grp_explo, "Depths"),
-                                                         subsection(d.grp_explo, "Water & screens")))
+        self.assertEqual((d.grp_depth, d.grp_screens), (d.pop_depths, d.pop_water))
+        self.assertTrue(all(p in d.opt_grid.popups() for p in (d.grp_depth, d.grp_screens, d.pop_plotted)))
         # closed after construction, restore, clear and reopen
         self.assertTrue(all(s.isCollapsed() for s in d.sections))
         for s in d.sections:
@@ -184,20 +184,24 @@ class Layout(PanelCase):
                            d.ground_readout],
             d.units_more: [d.z_units, d.datum],
             subsection(d.grp_explo, "Layers"): [d.explo_list, d.btn_add_points, d.layers_note],
-            subsection(d.grp_explo, "All layers"): [d.tolerance, d.label_dir, d.label_text, d.within_hint],
-            d.grp_depth: [d.depth_line, d.td_label, d.top_mode, d.checks_more, d.depth_readout],
-            d.checks_more: [d.zero_missing, d.top_max_diff, d.top_max_diff_row],
+            subsection(d.grp_explo, "Options"): [d.opt_grid, d.options_hint],
+            d.opt_grid: [d.opt_all, d.opt_depths, d.opt_water, d.opt_plotted],
+            d.pop_all: [d.tolerance, d.label_dir, d.label_text, d.within_hint],
+            d.grp_depth: [d.depth_line, d.td_label, d.top_mode, d.zero_missing, d.top_max_diff, d.top_max_diff_row,
+                          d.depth_readout],
             d.grp_screens: [d.screens, d.wl_label, d.screens_readout],
-            d.grp_explo: [d.grp_depth, d.grp_screens, d.plotted, d.explo_readout],
+            d.pop_plotted: [d.plotted, d.plotted.count_label, d.plotted.btn_show_all, d.plotted.tree,
+                            d.plotted.hint],
+            d.grp_explo: [d.options_sub, d.explo_readout],
             subsection(d.grp_other, "Layers"): [d.other_list, d.btn_add_other, d.other_readout],
-            subsection(d.grp_export, "Scale"): [d.h_scale, d.v_scale],
-            subsection(d.grp_export, "Elevations"): [d.z_mode, d.tile, d.z_range_row, d.z_min, d.z_max],
-            subsection(d.grp_export, "Sheet"): [d.sheet, d.fmt, d.orientation, d.title_text, d.distances_more,
+            subsection(d.grp_export, "Scale"): [d.h_scale, d.v_scale, d.distance_labels],
+            subsection(d.grp_export, "Elevations"): [d.z_mode, d.tile, d.z_auto_row, d.below_in, d.fill_grid,
+                                                     d.z_auto_hint, d.z_range_row, d.z_min, d.z_max],
+            subsection(d.grp_export, "Sheet"): [d.sheet_row, d.sheet, d.fmt, d.orientation, d.title_text,
                                                 d.export_readout],
-            d.distances_more: [d.distance_labels, d.allowed_sheets],
-            subsection(d.grp_style, "Grid"): [d.grid_color, d.grid_info, d.grid_custom_box, d.grid_auto,
-                                              d.grid_spacing_row, d.h_major, d.h_minor, d.v_major, d.v_minor,
-                                              d.fill_grid, d.below_in],
+            subsection(d.grp_style, "Grid"): [d.grid_color, d.grid_info, d.grid_custom_box, d.grid_table,
+                                              d.grid_auto, d.grid_spacing_row, d.h_major, d.h_minor, d.v_major,
+                                              d.v_minor],
             subsection(d.grp_style, "Depth lines"): [d.depth_lw_head, d.btn_lw_reset, d.depth_lw_black,
                                                      d.depth_lw_color, d.depth_lw_hint],
             subsection(d.grp_style, "Page"): [d.edge_margin, d.compact_layout, d.show_notes, d.show_bends,
@@ -210,8 +214,8 @@ class Layout(PanelCase):
         self.assertTrue(d.depth_lw_head.isAncestorOf(d.btn_lw_reset))
         self.assertIs(d.ground_editor, d.ground_row.editor)
         self.assertEqual((d.surface_list.objectName(), d._surface_layout.indexOf(d.ground_row)), ("xsSurfaceRows", 0))
-        self.assertEqual(d._disclosures, [d.units_more, d.checks_more, d.distances_more])
-        self.assertEqual([m.text() for m in d._disclosures], ["Units & datum", "Checks", "Distances & printers"])
+        self.assertEqual(d._disclosures, [d.units_more])
+        self.assertEqual([m.text() for m in d._disclosures], ["Units & datum"])
         # one row each: Pick | Draw | Selected; + Surface | + Bands… | + MODFLOW 6…; Legend | Drawn in
         self.assertTrue(d.btn_pick.parentWidget() is d.btn_draw.parentWidget() is d.btn_selected.parentWidget())
         self.assertTrue(d.add_surfaces_row.isAncestorOf(d.btn_add_mf6))
@@ -224,8 +228,10 @@ class Layout(PanelCase):
             for w in widgets:
                 self.assertTrue(pane.isAncestorOf(w), w)
         # gone
-        for name in ("depth_lw_new", "style_rule", "_other_flags_shown"):
+        for name in ("depth_lw_new", "style_rule", "_other_flags_shown", "checks_more", "distances_more",
+                     "allowed_sheets"):
             self.assertFalse(hasattr(d, name), name)
+        self.assertFalse(hasattr(d.plotted, "heading"))
         self.assertFalse(hasattr(d.plotted, "setExpanded") or hasattr(d.plotted, "isExpanded"))
         texts = [lab.text() for lab in d.content.findChildren(QLabel)]
         for gone in ("from LIDAR", "drawn in this order", "all layers", "Point layers"):
@@ -327,11 +333,11 @@ class Layout(PanelCase):
         self.assertEqual([b.toolTip() for b in d.z_mode.buttons()],
                          ["Rounded to the major grid", "Type the lowest and highest elevations"])
         self.assertEqual(d.title_text.placeholderText(), "Optional (project, site…)")
-        self.assertEqual([field_label_of(w) for w in (d.distance_labels, d.allowed_sheets)],
-                         ["Distances", "Printers take"])
+        self.assertEqual(field_label_of(d.distance_labels), "Distances")
+        self.assertFalse(hasattr(d, "allowed_sheets"))
         self.assertEqual([field_label_of(w) for w in (d.grid_color, d.fill_grid, d.below_in, d.depth_lw_black,
                                                       d.depth_lw_color, d.edge_margin)],
-                         ["Look", "Fill sheet", "Below lowest", "Black & gray", "Color", "Printer edge"])
+                         ["Look", "Fill sheet", "Room below lowest", "Black & gray", "Color", "Printer edge"])
         self.assertEqual(d.grid_auto.text(), "Spacing from the scale (1 in, 0.1 in)")
         self.assertEqual([field_label_of(w.parentWidget()) for w in (d.h_major, d.v_major)],
                          ["Horizontal, ft", "Vertical, ft"])
@@ -376,6 +382,8 @@ class Verbose(PanelCase):
         shown = [h for h in hints if h.wanted()]
         for h in shown:
             self.assertFalse(h.isHidden(), h.text())
+        d.opt_grid.open_popup(d.opt_all)                # (0.3.7: the within hint is in the All layers popup)
+        settle()
         for h in (d.line_hint, d.within_hint, d.style_hint, d.depth_lw_hint, d.line_readout, d.explo_readout,
                   d.export_readout):
             self.assertIn(h, shown)

@@ -67,6 +67,8 @@ class XSectionsPlugin:
             except (TypeError, RuntimeError):
                 pass
         self._project_signals = []
+        if self.preview is not None:
+            self.preview.leave_full_screen()     # (full screen: its dock back in its place before it goes)
         if self.dock is not None:
             self.dock.cleanup()
             try:
@@ -126,6 +128,8 @@ class XSectionsPlugin:
         self._restore()
 
     def _on_project_cleared(self) -> None:
+        if self.preview is not None:
+            self.preview.leave_full_screen()     # (nothing to show full screen: the preview back in its dock)
         if self.dock is not None:
             self.dock.project_cleared()
 

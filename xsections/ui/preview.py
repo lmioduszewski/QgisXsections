@@ -25,12 +25,17 @@ here) works while either is on. The marks are blitted over the plot (animated ar
 stay the same on screen at any zoom, never part of the drawing), and a move repaints only where they were and are
 (PreviewCanvas.repaint_rects). The dock moves the map marker from hoverChanged and hoverLeft, and shows the map
 cursor's place here with show_guide / hide_guide.
+
+Full screen (0.3.7, the toolbar's last toggle): the preview's dock floats and fills the screen it is on, and the
+section fits; the button again, or Esc, puts the dock back where it was (docked in its area at its size, or floating
+at its place) and fits again. Closed or hidden while full screen, the dock is put back as well, and shows there next
+time. F11 stays QGIS's; Esc is the preview's only while it is full screen. Nothing is remembered (a view state).
 """
 from __future__ import annotations
 
 import math
 import traceback
-from typing import List, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -40,17 +45,17 @@ from matplotlib.transforms import Bbox, IdentityTransform
 from qgis.core import Qgis, QgsApplication, QgsMessageLog
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QEvent, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import (QColor, QFont, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPalette, QPen,
-                             QPixmap, QRegion)
-from qgis.PyQt.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QToolBar,
-                                 QVBoxLayout, QWidget)
+from qgis.PyQt.QtGui import (QAction, QColor, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage, QKeySequence,
+                             QPainter, QPainterPath, QPalette, QPen, QPixmap, QRegion, QResizeEvent)
+from qgis.PyQt.QtWidgets import (QApplication, QDockWidget, QFrame, QHBoxLayout, QLabel, QMainWindow, QScrollArea,
+                                 QSizePolicy, QToolBar, QVBoxLayout, QWidget)
 
 from ..core.hover import distance_text, elev_text, hover_lines, hover_target, hover_values, strip_cells
 from ..render.scales import tick_base
 from . import settings_store
 from .popup import HoverPopup
 from .readout import IDLE_TEXT, NAVY, HoverReadout, past_text
-from .widgets import theme_for
+from .widgets import theme_for, wrap_tip
 
 SHEET_LINE = "#8b0000"
 SHEET_GID = "xsections-sheet-breaks"
@@ -88,6 +93,7 @@ ABOVE_FRAME_PX = 4.0                # the hover reaches this far above the frame
 HIT_DX_PX, HIT_BELOW_IN, HIT_ABOVE_IN = 6.0, 0.14, 0.62
 POINT_ABOVE_IN = 0.05
 SAME_SPOT_PX = 1.0                  # targets this close (in |x - its centre|, px) to the nearest are "here" too
+FULL_TIP = "Full screen: the section fills the screen; click again or press Esc to put it back"
 
 
 def zoom_limit(vw: float, vh: float, dpr: float = 1.0) -> float:
@@ -106,10 +112,11 @@ def zoom_step(z: float, direction: int, z_max: float = ZOOM_MAX) -> float:
     return min(max(nxt, 1.0), z_max)
 
 
-def _drawn_icon(color: QColor, draw) -> QIcon:
+def _drawn_icon(color: QColor, draw, icon: Optional[QIcon] = None, state=QIcon.State.Off) -> QIcon:
     """An icon drawn on a 20-unit grid by `draw(painter, k)` (k px per unit) at the toolbar's sizes, in `color` (the
-    theme's text colour: QGIS's dark themes leave the button text colour to the system)."""
-    icon = QIcon()
+    theme's text colour: QGIS's dark themes leave the button text colour to the system); added to `icon` for `state`
+    (a checked toggle's own picture) when given."""
+    icon = QIcon() if icon is None else icon
     for size in (16, 20, 24, 32, 48):
         pm = QPixmap(size, size)
         pm.fill(Qt.GlobalColor.transparent)
@@ -122,7 +129,7 @@ def _drawn_icon(color: QColor, draw) -> QIcon:
         p.setPen(pen)
         draw(p, k)
         p.end()
-        icon.addPixmap(pm)
+        icon.addPixmap(pm, QIcon.Mode.Normal, state)
     return icon
 
 
@@ -157,6 +164,43 @@ def popup_icon(color: QColor) -> QIcon:
     return _drawn_icon(color, draw)
 
 
+def full_screen_icon(color: QColor) -> QIcon:
+    """The "Full screen" toggle (QGIS has no icon for it): a corner at each corner of a square, pointing out; checked
+    (full screen), the corners point in (put it back)."""
+    def corners(inward: bool):
+        def draw(p, k):
+            for x, y, dx, dy in ((3.0, 3.0, 1, 1), (17.0, 3.0, -1, 1), (3.0, 17.0, 1, -1), (17.0, 17.0, -1, -1)):
+                if inward:                        # the corner 5 units in, its arms out to the square's sides
+                    x, y, dx, dy = x + 5.0 * dx, y + 5.0 * dy, -dx, -dy
+                path = QPainterPath(QPointF(x * k, (y + 5.0 * dy) * k))
+                path.lineTo(x * k, y * k)
+                path.lineTo((x + 5.0 * dx) * k, y * k)
+                p.drawPath(path)
+        return draw
+    return _drawn_icon(color, corners(True), _drawn_icon(color, corners(False)), QIcon.State.On)
+
+
+class _DockPlace(NamedTuple):
+    """Where the preview's dock was before it went full screen: in `window` (the main window), floating, or docked in
+    `area` at `size` px across it (a bottom dock's height, a side dock's width); its floating geometry and window
+    state (a docked one's: where Qt floats it next)."""
+    dock: QDockWidget
+    window: QMainWindow
+    floating: bool
+    area: Qt.DockWidgetArea
+    size: int
+    geometry: QRect
+    state: Qt.WindowState
+
+
+def _ancestor(w: Optional[QWidget], kind) -> Optional[QWidget]:
+    """The nearest parent of `w` that is a `kind`, or None."""
+    p = w.parentWidget() if w is not None else None
+    while p is not None and not isinstance(p, kind):
+        p = p.parentWidget()
+    return p
+
+
 def _padded(b: Bbox, pad: float, win: Optional[Bbox] = None) -> Optional[tuple]:
     """Box `b` (display px) grown by `pad` on every side and cut to `win`: (x0, y0, x1, y1), None when nothing of it
     is in `win`; the whole of `win` for a box that is not a number."""
@@ -187,7 +231,8 @@ def _zoom_key(event) -> Optional[int]:
 
 class PreviewCanvas(FigureCanvasQTAgg):
     """The preview's canvas. The wheel zooms (or pans, with Shift or sideways), a drag pans when zoomed in, a
-    double-click fits, + - 0 zoom; PreviewWidget does the work. Every other mouse event goes on to matplotlib."""
+    double-click fits, + - 0 zoom, Esc leaves full screen; PreviewWidget does the work. Every other mouse event goes
+    on to matplotlib."""
 
     def __init__(self, figure: Figure, view: "PreviewWidget"):
         super().__init__(figure)
@@ -308,6 +353,10 @@ class PreviewCanvas(FigureCanvasQTAgg):
             painter.restore()
 
     def keyPressEvent(self, event) -> None:
+        if self._view._leave_key(event):
+            self._view.leave_full_screen()
+            event.accept()
+            return
         step = _zoom_key(event)
         if step is None:
             super().keyPressEvent(event)
@@ -316,8 +365,10 @@ class PreviewCanvas(FigureCanvasQTAgg):
         event.accept()
 
     def event(self, event) -> bool:
-        # + - 0 belong to the preview while it has the focus, whatever shortcuts the main window has
-        if event.type() == QEvent.Type.ShortcutOverride and _zoom_key(event) is not None:
+        # + - 0 belong to the preview while it has the focus, whatever shortcuts the main window has (and Esc while
+        # it is full screen)
+        if event.type() == QEvent.Type.ShortcutOverride and (_zoom_key(event) is not None
+                                                             or self._view._leave_key(event)):
             event.accept()
             return True
         return super().event(event)
@@ -413,7 +464,7 @@ class _Marks:
 
 
 class PreviewWidget(QWidget):
-    """draw(model, settings, plan) or show_message(text). See the module docstring for zoom and hover."""
+    """draw(model, settings, plan) or show_message(text). See the module docstring for zoom, hover and full screen."""
 
     hoverChanged = pyqtSignal(float, int)       # station (ft); index in core.hover.hover_targets(model) (the
                                                 # explorations, then the other points) of what is pointed at, or -1
@@ -499,6 +550,20 @@ class PreviewWidget(QWidget):
         self._wheel_timer.setSingleShot(True)
         self._wheel_timer.setInterval(WHEEL_MS)
         self._wheel_timer.timeout.connect(self._flush_wheel)
+        # full screen: where the dock was (None when it is not full screen); after it was put back hidden, its
+        # place again to size it at its next show; the dock's hides and shows are looked at once they are done
+        self._full: Optional[_DockPlace] = None
+        self._full_resize: Optional[_DockPlace] = None
+        self._full_timer = QTimer(self)
+        self._full_timer.setSingleShot(True)
+        self._full_timer.setInterval(0)
+        self._full_timer.timeout.connect(self._full_screen_check)
+        # Esc anywhere in the full-screen window (the canvas takes it first when it has the focus); no shortcut
+        # while docked: Esc stays QGIS's
+        self.act_leave_full = QAction("Put the preview back", self)
+        self.act_leave_full.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.act_leave_full.triggered.connect(self.leave_full_screen)
+        self.addAction(self.act_leave_full)
         vp.installEventFilter(self)
         self.scroll.horizontalScrollBar().valueChanged.connect(self._scrolled)
         self.scroll.verticalScrollBar().valueChanged.connect(self._scrolled)
@@ -539,6 +604,10 @@ class PreviewWidget(QWidget):
         self.act_popup = tb.addAction(popup_icon(QColor(self._icon_color)), "Popup")
         self.act_popup.setCheckable(True)
         self.act_popup.setChecked(self._popup_on)
+        tb.addSeparator()
+        self.act_full = tb.addAction(full_screen_icon(QColor(self._icon_color)), "Full screen")
+        self.act_full.setCheckable(True)
+        self.act_full.setToolTip(wrap_tip(FULL_TIP))        # (0.3.7 finish, wrap_tip: a long tooltip wraps)
         self._toggle_tips()
         self.act_fit.triggered.connect(self.fit)
         self.act_zoom_out.triggered.connect(lambda: self._zoom_key(-1))
@@ -546,6 +615,7 @@ class PreviewWidget(QWidget):
         self.act_csv.triggered.connect(self._export_surfaces)
         self.act_strip.toggled.connect(self._toggle_strip)
         self.act_popup.toggled.connect(self._toggle_popup)
+        self.act_full.toggled.connect(self.set_full_screen)
         return tb
 
     # ---- public API
@@ -648,6 +718,127 @@ class PreviewWidget(QWidget):
             self._hover = None
             self._show_none(self._idle_text())
 
+    def is_full_screen(self) -> bool:
+        return self._full is not None
+
+    def set_full_screen(self, on: bool) -> None:
+        """The "Full screen" toggle. On: the preview's dock (shown, in a main window) floats and fills the screen it
+        is on, and the section fits. Off: leave_full_screen."""
+        if bool(on) == self.is_full_screen():
+            self._sync_full_action()
+        elif on:
+            self._enter_full_screen()
+        else:
+            self.leave_full_screen()
+
+    def leave_full_screen(self) -> None:
+        """Out of full screen: the dock back where it was, docked in its area at its size (Qt kept its place there)
+        or floating at its geometry, and the section fits again. A dock closed or hidden meanwhile is put back
+        hidden and gets its size when it next shows. (The plugin calls this before it unloads.)"""
+        place, self._full = self._full, None
+        if place is None:
+            return
+        self.act_leave_full.setShortcut(QKeySequence())
+        self._sync_full_action()
+        dock, win = place.dock, place.window
+        if sip.isdeleted(dock):
+            return
+        if not sip.isdeleted(win):
+            win.removeEventFilter(self)
+        dock.setWindowState(place.state)              # (not showNormal: a hidden dock stays hidden)
+        dock.setGeometry(place.geometry)              # (a docked one's: where it floats next time, as before)
+        if dock.isFloating() and dock.isHidden():
+            # QDockWidget notes where it floats next only from the Resize events it gets while floating, and a hidden
+            # one gets none: without this it would float over the whole screen next time
+            size = place.geometry.size()
+            QApplication.sendEvent(dock, QResizeEvent(size, size))
+        if not place.floating and not sip.isdeleted(win):
+            dock.setFloating(False)
+            if dock.isFloating() or win.dockWidgetArea(dock) != place.area:
+                win.addDockWidget(place.area, dock)   # (Qt lost its place: at the end of its area)
+                dock.setFloating(False)
+            self._full_resize = place
+            if dock.isVisible():
+                dock.raise_()                         # (in tabs: its tab in front again)
+                self._size_dock()
+        if self._full_resize is None:
+            dock.removeEventFilter(self)
+        self._drag = None                             # (Esc during a drag: the window moved under it)
+        self._update_cursor()
+        self.fit()
+
+    def _enter_full_screen(self) -> None:
+        dock = _ancestor(self, QDockWidget)
+        win = _ancestor(dock, QMainWindow)
+        if dock is None or win is None or not dock.isVisible():
+            self._sync_full_action()                  # (not in a shown dock: nothing to fill the screen with)
+            return
+        self._full_timer.stop()
+        self._full_resize = None
+        # the screen the dock is on (where its middle is: a main window may reach over two), before it floats
+        screen = QGuiApplication.screenAt(dock.mapToGlobal(dock.rect().center())) or dock.screen()
+        area = win.dockWidgetArea(dock)
+        vertical = area in (Qt.DockWidgetArea.TopDockWidgetArea, Qt.DockWidgetArea.BottomDockWidgetArea)
+        size = dock.height() if vertical else dock.width()
+        # (a dock in no area, say in a floating group of tabs, comes back as a floating dock)
+        floating = dock.isFloating() or area == Qt.DockWidgetArea.NoDockWidgetArea
+        if not dock.isFloating():
+            dock.setFloating(True)                    # (Qt keeps its place in the area for setFloating(False))
+        self._full = _DockPlace(dock, win, floating, area, size, dock.geometry(), dock.windowState())
+        dock.installEventFilter(self)                 # closed or hidden while full screen: put back
+        win.installEventFilter(self)                  # QGIS closing: put back first
+        dock.setGeometry(screen.availableGeometry())  # on that screen, then all of it
+        dock.showFullScreen()
+        dock.raise_()
+        dock.activateWindow()
+        self.canvas.setFocus()
+        self.act_leave_full.setShortcut(QKeySequence(Qt.Key.Key_Escape))
+        self._sync_full_action()
+        self.fit()
+
+    def _full_screen_check(self) -> None:
+        """The dock hid or showed. Closed or hidden while full screen (Alt+F4, the plugin's button), it is put
+        back (hidden); shown again after that, it gets its size in its area."""
+        if self._full is not None:
+            if sip.isdeleted(self._full.dock) or self._full.dock.isHidden():
+                self.leave_full_screen()
+        elif (self._full_resize is not None and not sip.isdeleted(self._full_resize.dock)
+              and self._full_resize.dock.isVisible()):
+            self._size_dock()
+
+    def _size_dock(self) -> None:
+        """The dock back in its area: its size there again."""
+        place, self._full_resize = self._full_resize, None
+        if place is None or sip.isdeleted(place.dock):
+            return
+        dock, win = place.dock, place.window
+        dock.removeEventFilter(self)
+        if sip.isdeleted(win) or dock.isFloating() or win.dockWidgetArea(dock) != place.area or place.size <= 0:
+            return
+        vertical = place.area in (Qt.DockWidgetArea.TopDockWidgetArea, Qt.DockWidgetArea.BottomDockWidgetArea)
+        orient = Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
+        win.resizeDocks([dock], [place.size], orient)
+        lay = win.layout()
+        if lay is not None:
+            lay.activate()                            # (laid out now: its size can be read)
+            got = dock.height() if vertical else dock.width()
+            if 0 < got != place.size:                 # in tabs: that was the size of the tabs, their bar too
+                win.resizeDocks([dock], [2 * place.size - got], orient)
+
+    def _full_dock(self) -> Optional[QDockWidget]:
+        """The dock that is full screen, or waits for its size after it was put back hidden."""
+        place = self._full if self._full is not None else self._full_resize
+        return None if place is None else place.dock
+
+    def _leave_key(self, event) -> bool:
+        """Esc while full screen."""
+        return self._full is not None and event.key() == Qt.Key.Key_Escape
+
+    def _sync_full_action(self) -> None:
+        """The toggle checked while full screen (its toggled signal comes back to set_full_screen, which then has
+        nothing to do)."""
+        self.act_full.setChecked(self._full is not None)
+
     # ---- Qt
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -662,7 +853,7 @@ class PreviewWidget(QWidget):
 
     def _apply_theme(self) -> None:
         """The theme's colours for the status text (the panel's muted text; the application palette, since a theme
-        stylesheet may leave this widget's own window colour transparent) and the hover toggles' icons (the text
+        stylesheet may leave this widget's own window colour transparent) and the drawn toggles' icons (the text
         colour: QGIS's dark themes leave the button text colour to the system)."""
         if not hasattr(self, "_status_css"):          # (events can come before the toolbar and the status exist)
             return
@@ -675,11 +866,17 @@ class PreviewWidget(QWidget):
             self._icon_color = color
             self.act_strip.setIcon(strip_icon(QColor(color)))
             self.act_popup.setIcon(popup_icon(QColor(color)))
+            self.act_full.setIcon(full_screen_icon(QColor(color)))
 
     def eventFilter(self, obj, event) -> bool:
-        if event.type() == QEvent.Type.Resize and obj is self.scroll.viewport():
+        t = event.type()
+        if t == QEvent.Type.Resize and obj is self.scroll.viewport():
             size = event.size()
             self._viewport_resized(size.width(), size.height())
+        elif t in (QEvent.Type.Hide, QEvent.Type.Show) and obj is self._full_dock():
+            self._full_timer.start()                  # (looked at once the hide or show is done)
+        elif t == QEvent.Type.Close and self._full is not None and obj is self._full.window:
+            self.leave_full_screen()                  # QGIS is closing: the dock back before it saves the layout
         return super().eventFilter(obj, event)
 
     # ---- drawing
